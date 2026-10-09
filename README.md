@@ -90,6 +90,49 @@ dotnet run --no-build --no-launch-profile --project src/backend/PrimeTect.Api --
 
 In a second terminal, run `Set-Location src/frontend; npm.cmd run dev -- --hostname 127.0.0.1 --port 3000` and open `http://localhost:3000`. Stop each process with `Ctrl+C`; remove only the explicitly named demo database after verification if it is no longer needed. No email is sent by the demo, and invitation tokens must be shared manually.
 
+### Prepared local collection demo
+
+This checkout has a separate synthetic demo database prepared on 2026-10-10:
+`primetect_demo_collections_20261010_a20fcfd3`. It is not `primetect` and was created from empty before all committed
+migrations were applied. The demo contains an unequal Ground/Upper floor layout, a known tenant occupying two units,
+an unnamed occupancy, an approved September 2026 billing cycle, an approved partial collection with a pending reversal,
+and a pending collection report.
+
+The local-only files are ignored by Git:
+
+- `src/backend/PrimeTect.Api/appsettings.Demo.json` points the `Demo` environment at that database.
+- `src/backend/PrimeTect.Api/demo-credentials.local.json` contains separate Admin, Building Manager, Building Staff,
+  and Finance Manager login credentials. View it locally with
+  `Get-Content src/backend/PrimeTect.Api/demo-credentials.local.json`; never copy its values into a tracked file.
+
+The API is prepared at `http://127.0.0.1:5000` and its health endpoint is
+`http://127.0.0.1:5000/api/health`. Start it from the repository root with:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "Demo"
+dotnet run --no-build --no-launch-profile --project src/backend/PrimeTect.Api --urls http://127.0.0.1:5000
+```
+
+In a second terminal, start the frontend with
+`Set-Location src/frontend; npm.cmd run dev -- --hostname 127.0.0.1 --port 3000`, then open
+`http://localhost:3000`. Stop a foreground server with `Ctrl+C`; for the background API first inspect
+`Get-NetTCPConnection -LocalPort 5000 -State Listen` and confirm its owning process is PrimeTect.Api, then run
+`Stop-Process -Id <confirmed-api-pid>` (the `dotnet run` host may also be stopped afterward). No email or SMS is sent.
+
+Manual review checklist:
+
+1. Log in as the Building Manager and confirm only the assigned property is shown. Open **Meter Readings** and
+   **Collections**; the approved G-01 collection can request a reversal with a required reason, while the pending
+   reversal states that the balance is unchanged.
+2. Log in as the Finance Manager and open **Collections**. Review the U-01 pending receipt and the G-01 pending
+   reversal. Return one with a reason, then resubmit it as the Building Manager; approve it as Finance Manager and
+   confirm the confirmed/outstanding totals refresh. Do not double-click review actions.
+3. Log in as Building Staff and confirm assigned operational screens remain available while property, tenant, charge,
+   staff, bill-approval, and collection-approval controls remain unavailable.
+4. Log in as Admin and confirm the organization-wide property/settings, bill-review, and collection-review screens.
+5. Repeat at a narrow browser width and check keyboard focus, error text, and touch-target wrapping. Browser automation
+   was unavailable during this checkpoint, so desktop/mobile visual verification remains pending.
+
 ## Build and verify
 
 ```powershell
@@ -117,6 +160,11 @@ Remove-Item Env:PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION
 If the variable is absent, the PostgreSQL facts are reported as skipped with that reason. If it is supplied but the service is unavailable or the safety checks reject the connection, the facts fail with the exact blocker and no existing database is changed. They never fall back to InMemory storage. Before opening a test connection, the fixture verifies that the effective database name is the generated `primetect_verification_<guid>` target; `primetect` and any other existing database are rejected. The tests cover migration application, numeric precision, duplicate cycle constraints, stale versions, organization/property authorization, self-approval, atomic approval/audit failure, immutable snapshots, immediately preceding approved-period readings, missing-period/policy-gap blocking, approved unit/tenant/property statements, multi-unit tenant identity, unnamed tenant details, historical rate changes, zero baselines, and incomplete comparisons. The regular InMemory tests cover the broader workflow matrix, but cannot prove PostgreSQL-specific behavior.
 
 ## Current milestone
+
+Collection review screens include the bounded reversal controls: the original approved collection, unit, amount, and
+reason are shown; a submitting role can request or resubmit with a reason; an Admin or Finance Manager can return or
+approve independently. Pending reversals leave confirmed balances unchanged, while approved reversals refresh the
+review totals. Stale versions are surfaced as refresh-required errors and in-flight actions are disabled.
 
 - Owner registration creates an organization and Admin account in one transaction.
 - Identity-backed HttpOnly cookie authentication supports login/logout, secure one-time invitations, organization isolation, and assigned-property access. The legacy `Manager` enum is displayed as **Building Manager** and is limited to assigned-property reading and manual collection submission. `BuildingStaff` has the same operational submission boundary. `FinanceManager` is assigned-property collection review/approval only. `Admin` retains organization-wide administration, settings, bill approval, collection approval, and assignment management. No older role bypasses these server-side checks.
