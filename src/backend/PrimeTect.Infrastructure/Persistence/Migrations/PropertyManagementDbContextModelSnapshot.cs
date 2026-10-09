@@ -468,6 +468,212 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.ToTable("charge_configurations", (string)null);
                 });
 
+            modelBuilder.Entity("PrimeTect.Domain.Entities.CollectionAuditEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AfterJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BeforeJson")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("CollectionReportId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CollectionReversalId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CollectionReportId");
+
+                    b.HasIndex("CollectionReversalId");
+
+                    b.HasIndex("OrganizationId", "CollectionReportId", "OccurredAtUtc");
+
+                    b.ToTable("collection_audit_entries", (string)null);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.CollectionReport", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("AmountReceived")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTimeOffset?>("ApprovedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("BilledAmountSnapshot")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateOnly>("BillingMonth")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("BillingUnitBillId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("FloorNameSnapshot")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTimeOffset>("LastChangedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("LastChangedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("OccupancyAssignmentIdSnapshot")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PaymentMethod")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<DateOnly>("ReceivedDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("ReferenceNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("ReporterUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ReturnReason")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("SubmissionKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("SubmittedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("TenantIdSnapshot")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TenantNameSnapshot")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("TenantPhoneSnapshot")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<Guid>("UnitId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("UnitNameSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BillingUnitBillId");
+
+                    b.HasIndex("OrganizationId", "SubmissionKey")
+                        .IsUnique();
+
+                    b.HasIndex("OrganizationId", "BillingUnitBillId", "Status");
+
+                    b.ToTable("collection_reports", (string)null);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.CollectionReversal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ApprovedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CollectionReportId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("LastChangedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("LastChangedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("RequestedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ReturnReason")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CollectionReportId");
+
+                    b.HasIndex("OrganizationId", "CollectionReportId", "Status");
+
+                    b.ToTable("collection_reversals", (string)null);
+                });
+
             modelBuilder.Entity("PrimeTect.Domain.Entities.Floor", b =>
                 {
                     b.Property<Guid>("Id")
@@ -928,6 +1134,38 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("UnitId")
                         .OnDelete(DeleteBehavior.Cascade);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.CollectionAuditEntry", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.CollectionReport", null)
+                        .WithMany()
+                        .HasForeignKey("CollectionReportId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PrimeTect.Domain.Entities.CollectionReversal", null)
+                        .WithMany()
+                        .HasForeignKey("CollectionReversalId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.CollectionReport", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.BillingUnitBill", null)
+                        .WithMany()
+                        .HasForeignKey("BillingUnitBillId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.CollectionReversal", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.CollectionReport", null)
+                        .WithMany()
+                        .HasForeignKey("CollectionReportId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("PrimeTect.Domain.Entities.Floor", b =>

@@ -89,9 +89,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 4 || pending.Any())
+            if (applied.Count() != 5 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected four applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected five applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)
@@ -292,7 +292,7 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(4L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(5L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));
@@ -503,9 +503,9 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.False(disabledSaved.WarningEnabled);
 
         var submitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/submit", new { expectedVersion = saved.Version }));
-        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"settings-manager-{suffix}@example.test", role = "Manager" }));
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"settings-approver-{suffix}@example.test", role = "Admin" }));
         using var manager = api.CreateClient();
-        await AcceptInvitationAsync(manager, invitation.InvitationToken, "Settings Manager");
+        await AcceptInvitationAsync(manager, invitation.InvitationToken, "Settings Approver");
         var approved = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/approve", new { expectedVersion = submitted.Version }));
         Assert.Equal(BillingCycleStatus.Approved, approved.Status);
 
@@ -597,9 +597,9 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.True(policyDraft.BlockingBillCount > 0);
         Assert.Equal(HttpStatusCode.BadRequest, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{policyDraft.Id}/submit", new { expectedVersion = policyDraft.Version })).StatusCode);
 
-        var managerInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"billing-manager-{suffix}@example.test", role = "Manager" }));
+        var managerInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"billing-operator-{suffix}@example.test", role = "Admin" }));
         using var manager = api.CreateClient();
-        await AcceptInvitationAsync(manager, managerInvitation.InvitationToken, "Billing Manager");
+        await AcceptInvitationAsync(manager, managerInvitation.InvitationToken, "Billing Operator");
 
         var fixedProperty = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
         {
@@ -712,9 +712,9 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         var suffix = Guid.NewGuid().ToString("N")[..8];
         var adminEmail = $"reports-admin-{suffix}@example.test";
         await RegisterAsync(admin, adminEmail, "Reports Admin");
-        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"reports-manager-{suffix}@example.test", role = "Manager" }));
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"reports-operator-{suffix}@example.test", role = "Admin" }));
         using var manager = api.CreateClient();
-        await AcceptInvitationAsync(manager, invitation.InvitationToken, "Reports Manager");
+        await AcceptInvitationAsync(manager, invitation.InvitationToken, "Reports Operator");
 
         var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
         {
@@ -818,6 +818,95 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal(HttpStatusCode.NotFound, (await otherOrganization.GetAsync($"/api/properties/{property.Id}/billing-reports/2026-02/property-summary")).StatusCode);
     }
 
+    [PostgresFact]
+    public async Task PostgreSQL_manual_collection_reports_persist_independent_approval_and_balance_snapshots()
+    {
+        RequirePostgres();
+
+        using var api = new PostgresPrimeTectApiFactory(database.ConnectionString);
+        using var admin = api.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        await RegisterAsync(admin, $"collections-admin-{suffix}@example.test", "Collections Admin");
+
+        var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Collections Property {suffix}",
+            address = "7 Collection Street",
+            propertyType = "ApartmentBuilding",
+            floors = new[] { new { name = "Ground", unitCount = 1, unitNames = new[] { "C-1" } } },
+        }));
+        var unit = property.Floors.Single().Units.Single();
+        var tenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null }));
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unit.Id}/occupancy", new { tenantId = tenant.Id, startDate = "2026-01-01", endDate = (string?)null })).StatusCode);
+        await PutChargesAsync(admin, property.Id, new[] { new { chargeType = "ServiceCharge", mode = "Custom", billingMonth = "2026-01-01", amount = (decimal?)300m, customLabel = (string?)null } });
+
+        var draft = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-01-01" }));
+        var submitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/submit", new { expectedVersion = draft.Version }));
+        var secondAdminInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"collections-approver-{suffix}@example.test", role = "Admin" }));
+        using var secondAdmin = api.CreateClient();
+        await AcceptInvitationAsync(secondAdmin, secondAdminInvitation.InvitationToken, "Collections Approver");
+        var approvedBill = await ReadAsync<BillingCycleResponse>(await secondAdmin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/approve", new { expectedVersion = submitted.Version }));
+        Assert.Equal(BillingCycleStatus.Approved, approvedBill.Status);
+
+        var managerInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"collections-manager-{suffix}@example.test", role = "Manager" }));
+        using var manager = api.CreateClient();
+        var managerUser = await AcceptInvitationAsync(manager, managerInvitation.InvitationToken, "Collections Manager");
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{managerUser.Id}", null)).StatusCode);
+
+        var financeInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"collections-finance-{suffix}@example.test", role = "FinanceManager" }));
+        using var finance = api.CreateClient();
+        var financeUser = await AcceptInvitationAsync(finance, financeInvitation.InvitationToken, "Collections Finance");
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{financeUser.Id}", null)).StatusCode);
+
+        var report = await ReadAsync<CollectionReportResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/collection-reports", new
+        {
+            billingUnitBillId = approvedBill.Bills.Single().Id,
+            amountReceived = 125.55m,
+            receivedDate = "2026-01-15",
+            paymentMethod = "BankTransfer",
+            referenceNote = "Manual ledger reference",
+            submissionKey = Guid.NewGuid(),
+        }));
+        Assert.Equal(CollectionReportStatus.Pending, report.Status);
+        Assert.Equal(300m, report.BilledAmount);
+        Assert.Equal(300m, report.RemainingBalance);
+        Assert.Equal(HttpStatusCode.Forbidden, (await manager.PostAsJsonAsync($"/api/collection-reports/{report.Id}/approve", new { expectedVersion = report.Version })).StatusCode);
+
+        var approvedReport = await ReadAsync<CollectionReportResponse>(await finance.PostAsJsonAsync($"/api/collection-reports/{report.Id}/approve", new { expectedVersion = report.Version }));
+        Assert.Equal(CollectionReportStatus.Approved, approvedReport.Status);
+        Assert.Equal(125.55m, approvedReport.ConfirmedCollectedAmount);
+        Assert.Equal(174.45m, approvedReport.RemainingBalance);
+
+        var failedReport = await ReadAsync<CollectionReportResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/collection-reports", new
+        {
+            billingUnitBillId = approvedBill.Bills.Single().Id,
+            amountReceived = 25m,
+            receivedDate = "2026-01-16",
+            paymentMethod = "Cash",
+            referenceNote = "Atomic rollback check",
+            submissionKey = Guid.NewGuid(),
+        }));
+        api.FailNextSave = true;
+        Assert.Equal(HttpStatusCode.InternalServerError, (await finance.PostAsJsonAsync($"/api/collection-reports/{failedReport.Id}/approve", new { expectedVersion = failedReport.Version })).StatusCode);
+        var afterFailedApproval = await ReadAsync<CollectionQueueResponse>(await finance.GetAsync($"/api/properties/{property.Id}/collection-reports/2026-01"));
+        Assert.Equal(125.55m, afterFailedApproval.ConfirmedCollectedTotal);
+        Assert.Equal(CollectionReportStatus.Pending, afterFailedApproval.Items.Single(item => item.Id == failedReport.Id).Status);
+        var retryApproved = await ReadAsync<CollectionReportResponse>(await finance.PostAsJsonAsync($"/api/collection-reports/{failedReport.Id}/approve", new { expectedVersion = failedReport.Version }));
+        Assert.Equal(CollectionReportStatus.Approved, retryApproved.Status);
+        Assert.Equal(150.55m, retryApproved.ConfirmedCollectedAmount);
+        Assert.Equal(149.45m, retryApproved.RemainingBalance);
+
+        await PutChargesAsync(admin, property.Id, new[] { new { chargeType = "ServiceCharge", mode = "Custom", billingMonth = "2026-01-01", amount = (decimal?)999.99m, customLabel = (string?)null } });
+        var unchanged = await ReadAsync<CollectionQueueResponse>(await finance.GetAsync($"/api/properties/{property.Id}/collection-reports/2026-01"));
+        Assert.Equal(300m, unchanged.BilledTotal);
+        Assert.Equal(150.55m, unchanged.ConfirmedCollectedTotal);
+        Assert.Equal(149.45m, unchanged.OutstandingTotal);
+
+        using var otherOrganization = api.CreateClient();
+        await RegisterAsync(otherOrganization, $"collections-other-{suffix}@example.test", "Other Collections Admin");
+        Assert.Equal(HttpStatusCode.NotFound, (await otherOrganization.GetAsync($"/api/properties/{property.Id}/collection-reports/2026-01")).StatusCode);
+    }
+
     private void RequirePostgres()
     {
         if (!database.IsAvailable)
@@ -844,10 +933,11 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    private static async Task AcceptInvitationAsync(HttpClient client, string token, string fullName)
+    private static async Task<ApiUserResponse> AcceptInvitationAsync(HttpClient client, string token, string fullName)
     {
         var response = await client.PostAsJsonAsync("/api/auth/accept-invitation", new { token, fullName, password = "StrongPass!123" });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await response.Content.ReadFromJsonAsync<ApiUserResponse>(JsonOptions))!;
     }
 
     private static async Task PutChargesAsync(HttpClient client, Guid propertyId, object[] items)
@@ -910,6 +1000,8 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
 
     private sealed record InvitationResponse(Guid Id, string Email, UserRole Role, DateTimeOffset ExpiresAtUtc, string InvitationToken, string DeliveryStatus);
 
+    private sealed record ApiUserResponse(Guid Id, string Email, string FullName, UserRole Role, Guid OrganizationId);
+
     private sealed record BillingCycleResponse(Guid Id, Guid PropertyId, DateOnly BillingMonth, BillingCycleStatus Status, long Version, Guid LastChangedByUserId, DateTimeOffset LastChangedAtUtc, string? ReturnReason, decimal DraftTotal, decimal? ApprovedTotal, int BlockingBillCount, List<BillingUnitBillResponse> Bills, List<BillingAuditResponse> Audit);
 
     private sealed record BillingUnitBillResponse(Guid Id, Guid UnitId, string UnitName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, DateOnly? OccupancyStartDate, DateOnly? OccupancyEndDate, string? BlockingReason, decimal Total, bool ElectricityWarning, List<BillingChargeLineResponse> Charges);
@@ -917,6 +1009,12 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
     private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, bool WarningEnabled, decimal? WarningThreshold, decimal Amount);
 
     private sealed record BillingAuditResponse(Guid Id, Guid ActorUserId, BillingAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
+
+    private sealed record CollectionReportResponse(Guid Id, Guid BillingUnitBillId, Guid BillingCycleId, Guid PropertyId, DateOnly BillingMonth, Guid UnitId, string UnitName, string? FloorName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, decimal BilledAmount, decimal ConfirmedCollectedAmount, decimal RemainingBalance, decimal AmountReceived, DateOnly ReceivedDate, PaymentMethod PaymentMethod, string? ReferenceNote, Guid ReporterUserId, string ReporterName, DateTimeOffset SubmittedAtUtc, CollectionReportStatus Status, long Version, string? ReturnReason, Guid? ApprovedByUserId, DateTimeOffset? ApprovedAtUtc, bool IsReversed, CollectionReversalStatus? ReversalStatus, Guid? ReversalId, long? ReversalVersion, string? ReversalReason, List<CollectionAuditResponse> Audit);
+
+    private sealed record CollectionAuditResponse(Guid Id, Guid? CollectionReversalId, Guid ActorUserId, CollectionAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
+
+    private sealed record CollectionQueueResponse(List<CollectionReportResponse> Items, decimal BilledTotal, decimal PendingReportedTotal, decimal ConfirmedCollectedTotal, decimal OutstandingTotal);
 
     private sealed record BillingStatementResponse(string StatementType, Guid PropertyId, Guid BillingCycleId, string PropertyName, string PropertyAddress, DateOnly BillingMonth, DateTimeOffset ApprovalDate, decimal ApprovedTotal, Guid? TenantId, List<BillingStatementUnitResponse> Bills);
 

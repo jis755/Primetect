@@ -5,6 +5,7 @@ public enum UserRole
     Admin = 1,
     Manager = 2,
     BuildingStaff = 3,
+    FinanceManager = 4,
 }
 
 public enum PropertyType
@@ -60,6 +61,39 @@ public enum MeterReadingSource
     Missing = 1,
     ApprovedPeriod = 2,
     OpeningEntry = 3,
+}
+
+public enum CollectionReportStatus
+{
+    Pending = 1,
+    Returned = 2,
+    Approved = 3,
+}
+
+public enum PaymentMethod
+{
+    Cash = 1,
+    BankTransfer = 2,
+    MobilePayment = 3,
+    Other = 4,
+}
+
+public enum CollectionReversalStatus
+{
+    Pending = 1,
+    Returned = 2,
+    Approved = 3,
+}
+
+public enum CollectionAuditAction
+{
+    Submitted = 1,
+    Corrected = 2,
+    Returned = 3,
+    Approved = 4,
+    ReversalRequested = 5,
+    ReversalReturned = 6,
+    ReversalApproved = 7,
 }
 
 public enum OnboardingStatus

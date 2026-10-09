@@ -35,6 +35,12 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<BillingAuditEntry> BillingAuditEntries => Set<BillingAuditEntry>();
 
+    public DbSet<CollectionReport> CollectionReports => Set<CollectionReport>();
+
+    public DbSet<CollectionReversal> CollectionReversals => Set<CollectionReversal>();
+
+    public DbSet<CollectionAuditEntry> CollectionAuditEntries => Set<CollectionAuditEntry>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -201,6 +207,52 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(audit => audit.AfterJson).HasColumnType("text");
             entity.HasIndex(audit => new { audit.OrganizationId, audit.BillingCycleId, audit.OccurredAtUtc });
             entity.HasOne<BillingCycle>().WithMany().HasForeignKey(audit => audit.BillingCycleId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CollectionReport>(entity =>
+        {
+            entity.ToTable("collection_reports");
+            entity.HasKey(report => report.Id);
+            entity.Property(report => report.UnitNameSnapshot).HasMaxLength(100).IsRequired();
+            entity.Property(report => report.FloorNameSnapshot).HasMaxLength(100);
+            entity.Property(report => report.TenantNameSnapshot).HasMaxLength(200);
+            entity.Property(report => report.TenantPhoneSnapshot).HasMaxLength(50);
+            entity.Property(report => report.BillingMonth).HasColumnType("date");
+            entity.Property(report => report.BilledAmountSnapshot).HasPrecision(18, 2);
+            entity.Property(report => report.AmountReceived).HasPrecision(18, 2);
+            entity.Property(report => report.ReceivedDate).HasColumnType("date");
+            entity.Property(report => report.PaymentMethod).HasConversion<string>().HasMaxLength(30).IsRequired();
+            entity.Property(report => report.ReferenceNote).HasMaxLength(500);
+            entity.Property(report => report.SubmissionKey).IsRequired();
+            entity.Property(report => report.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(report => report.Version).IsConcurrencyToken();
+            entity.HasIndex(report => new { report.OrganizationId, report.SubmissionKey }).IsUnique();
+            entity.HasIndex(report => new { report.OrganizationId, report.BillingUnitBillId, report.Status });
+            entity.HasOne<BillingUnitBill>().WithMany().HasForeignKey(report => report.BillingUnitBillId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<CollectionReversal>(entity =>
+        {
+            entity.ToTable("collection_reversals");
+            entity.HasKey(reversal => reversal.Id);
+            entity.Property(reversal => reversal.Reason).HasMaxLength(500).IsRequired();
+            entity.Property(reversal => reversal.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(reversal => reversal.Version).IsConcurrencyToken();
+            entity.HasIndex(reversal => new { reversal.OrganizationId, reversal.CollectionReportId, reversal.Status });
+            entity.HasOne<CollectionReport>().WithMany().HasForeignKey(reversal => reversal.CollectionReportId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CollectionAuditEntry>(entity =>
+        {
+            entity.ToTable("collection_audit_entries");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.Action).HasConversion<string>().HasMaxLength(30).IsRequired();
+            entity.Property(audit => audit.Reason).HasMaxLength(500);
+            entity.Property(audit => audit.BeforeJson).HasColumnType("text");
+            entity.Property(audit => audit.AfterJson).HasColumnType("text");
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.CollectionReportId, audit.OccurredAtUtc });
+            entity.HasOne<CollectionReport>().WithMany().HasForeignKey(audit => audit.CollectionReportId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<CollectionReversal>().WithMany().HasForeignKey(audit => audit.CollectionReversalId).OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

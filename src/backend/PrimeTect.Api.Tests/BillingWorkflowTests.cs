@@ -220,13 +220,22 @@ public sealed class BillingWorkflowTests : IClassFixture<PrimeTectApiFactory>
         var fixedSubmitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{fixedProperty.Id}/billing-cycles/{fixedDraft.Id}/submit", new { expectedVersion = fixedDraft.Version }));
         Assert.Equal(HttpStatusCode.Forbidden, (await admin.PostAsJsonAsync($"/api/properties/{fixedProperty.Id}/billing-cycles/{fixedDraft.Id}/approve", new { expectedVersion = fixedSubmitted.Version })).StatusCode);
 
+        var approverInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "policy-approver@example.test", role = "Admin" }));
+        using var approver = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.OK, (await approver.PostAsJsonAsync("/api/auth/accept-invitation", new
+        {
+            token = approverInvitation.InvitationToken,
+            fullName = "Policy Approver",
+            password = "StrongPass!123",
+        })).StatusCode);
+
         factory.FailNextSave = true;
-        var failedApproval = await manager.PostAsJsonAsync($"/api/properties/{fixedProperty.Id}/billing-cycles/{fixedDraft.Id}/approve", new { expectedVersion = fixedSubmitted.Version });
+        var failedApproval = await approver.PostAsJsonAsync($"/api/properties/{fixedProperty.Id}/billing-cycles/{fixedDraft.Id}/approve", new { expectedVersion = fixedSubmitted.Version });
         Assert.Equal(HttpStatusCode.InternalServerError, failedApproval.StatusCode);
         var stillSubmitted = await ReadAsync<BillingCycleResponse>(await admin.GetAsync($"/api/properties/{fixedProperty.Id}/billing-cycles/2026-04"));
         Assert.Equal(BillingCycleStatus.Submitted, stillSubmitted.Status);
         Assert.DoesNotContain(stillSubmitted.Audit, item => item.Action == BillingAuditAction.Approved);
-        var finallyApproved = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{fixedProperty.Id}/billing-cycles/{fixedDraft.Id}/approve", new { expectedVersion = stillSubmitted.Version }));
+        var finallyApproved = await ReadAsync<BillingCycleResponse>(await approver.PostAsJsonAsync($"/api/properties/{fixedProperty.Id}/billing-cycles/{fixedDraft.Id}/approve", new { expectedVersion = stillSubmitted.Version }));
         Assert.Equal(BillingCycleStatus.Approved, finallyApproved.Status);
     }
 
@@ -308,15 +317,15 @@ public sealed class BillingWorkflowTests : IClassFixture<PrimeTectApiFactory>
         Assert.Equal(new DateOnly(2026, 2, 1), firstBill.Charges.Single().CurrentReadingDate);
 
         var submitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/submit", new { expectedVersion = saved.Version }));
-        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"rate-manager-{suffix}@example.test", role = "Manager" }));
-        using var manager = factory.CreateClient();
-        Assert.Equal(HttpStatusCode.OK, (await manager.PostAsJsonAsync("/api/auth/accept-invitation", new
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"rate-approver-{suffix}@example.test", role = "Admin" }));
+        using var approver = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.OK, (await approver.PostAsJsonAsync("/api/auth/accept-invitation", new
         {
             token = invitation.InvitationToken,
-            fullName = "Rate Manager",
+            fullName = "Rate Approver",
             password = "StrongPass!123",
         })).StatusCode);
-        var approved = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/approve", new { expectedVersion = submitted.Version }));
+        var approved = await ReadAsync<BillingCycleResponse>(await approver.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/approve", new { expectedVersion = submitted.Version }));
         Assert.Equal(BillingCycleStatus.Approved, approved.Status);
 
         var ended = await admin.PostAsJsonAsync($"/api/properties/{property.Id}/charges/Electricity/end", new { billingMonth = "2026-03-01" });

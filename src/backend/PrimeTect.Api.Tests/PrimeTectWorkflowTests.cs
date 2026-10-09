@@ -142,7 +142,7 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         var invitationResponse = await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "staff-workflow@example.test", role = "BuildingStaff" });
         Assert.Equal(HttpStatusCode.Created, invitationResponse.StatusCode);
         var invitation = await ReadAsync<InvitationResponse>(invitationResponse);
-        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "should-not-be-admin@example.test", role = "Admin" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "second-admin@example.test", role = "Admin" })).StatusCode);
 
         using var staff = factory.CreateClient();
         var acceptResponse = await staff.PostAsJsonAsync("/api/auth/accept-invitation", new
@@ -176,13 +176,20 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
             isArchived = false,
         })).StatusCode);
 
-        var emptyTenantResponse = await staff.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null });
+        Assert.Equal(HttpStatusCode.Forbidden, (await staff.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null })).StatusCode);
+        var emptyTenantResponse = await admin.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null });
         Assert.Equal(HttpStatusCode.Created, emptyTenantResponse.StatusCode);
         var tenant = await ReadAsync<TenantResponse>(emptyTenantResponse);
         Assert.Null(tenant.Name);
         Assert.Null(tenant.Phone);
 
-        var firstOccupancyResponse = await staff.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy", new
+        Assert.Equal(HttpStatusCode.Forbidden, (await staff.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy", new
+        {
+            tenantId = tenant.Id,
+            startDate = "2026-01-01",
+            endDate = (string?)null,
+        })).StatusCode);
+        var firstOccupancyResponse = await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy", new
         {
             tenantId = tenant.Id,
             startDate = "2026-01-01",
@@ -190,16 +197,16 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         });
         Assert.Equal(HttpStatusCode.Created, firstOccupancyResponse.StatusCode);
         var firstOccupancy = await ReadAsync<OccupancyResponse>(firstOccupancyResponse);
-        Assert.Equal(HttpStatusCode.Created, (await staff.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unitB.Id}/occupancy", new
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unitB.Id}/occupancy", new
         {
             tenantId = tenant.Id,
             startDate = "2026-02-01",
             endDate = (string?)null,
         })).StatusCode);
 
-        var secondTenantResponse = await staff.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = "01700000000" });
+        var secondTenantResponse = await admin.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = "01700000000" });
         var secondTenant = await ReadAsync<TenantResponse>(secondTenantResponse);
-        var overlap = await staff.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy", new
+        var overlap = await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy", new
         {
             tenantId = secondTenant.Id,
             startDate = "2026-03-01",
@@ -207,17 +214,17 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         });
         Assert.Equal(HttpStatusCode.Conflict, overlap.StatusCode);
 
-        var closeOccupancy = await staff.PutAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy/{firstOccupancy.Id}/close", new { endDate = "2026-06-01" });
+        var closeOccupancy = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy/{firstOccupancy.Id}/close", new { endDate = "2026-06-01" });
         Assert.Equal(HttpStatusCode.OK, closeOccupancy.StatusCode);
-        var history = await staff.GetAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy");
+        var history = await admin.GetAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy");
         Assert.Contains("2026-06-01", await history.Content.ReadAsStringAsync());
 
-        var tenantUpdate = await staff.PutAsJsonAsync($"/api/tenants/{tenant.Id}", new { name = "Details Added Later", phone = (string?)null });
+        var tenantUpdate = await admin.PutAsJsonAsync($"/api/tenants/{tenant.Id}", new { name = "Details Added Later", phone = (string?)null });
         var updatedTenant = await ReadAsync<TenantResponse>(tenantUpdate);
         Assert.Equal("Details Added Later", updatedTenant.Name);
         Assert.Null(updatedTenant.Phone);
 
-        var statusResponse = await staff.PutAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy-status", new { status = "Occupied" });
+        var statusResponse = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy-status", new { status = "Occupied" });
         Assert.Equal(HttpStatusCode.OK, statusResponse.StatusCode);
 
         var propertyChargeResponse = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/charges", new

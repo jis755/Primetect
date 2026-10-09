@@ -28,30 +28,30 @@ public static class PrimeTectEndpointMapping
         secure.MapPost("/auth/logout", (Delegate)LogoutAsync);
         secure.MapGet("/properties", (Delegate)GetPropertiesAsync);
         secure.MapGet("/properties/{propertyId:guid}", (Delegate)GetPropertyAsync);
-        secure.MapPost("/properties/preview", (Delegate)PreviewProperty).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPost("/properties", (Delegate)CreatePropertyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPut("/properties/{propertyId:guid}", (Delegate)UpdatePropertyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPost("/properties/{propertyId:guid}/floors", (Delegate)AddFloorAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPut("/properties/{propertyId:guid}/floors/{floorId:guid}", (Delegate)UpdateFloorAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}", (Delegate)UpdateUnitAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy-status", (Delegate)UpdateOccupancyStatusAsync);
-        secure.MapGet("/staff", (Delegate)GetStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
+        secure.MapPost("/properties/preview", (Delegate)PreviewProperty).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties", (Delegate)CreatePropertyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}", (Delegate)UpdatePropertyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/floors", (Delegate)AddFloorAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/floors/{floorId:guid}", (Delegate)UpdateFloorAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}", (Delegate)UpdateUnitAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy-status", (Delegate)UpdateOccupancyStatusAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapGet("/staff", (Delegate)GetStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/staff/invitations", (Delegate)CreateInvitationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/properties/{propertyId:guid}/staff/{userId:guid}", (Delegate)AssignStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapDelete("/properties/{propertyId:guid}/staff/{userId:guid}", (Delegate)RemoveStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapGet("/tenants", (Delegate)GetTenantsAsync);
-        secure.MapPost("/tenants", (Delegate)CreateTenantAsync);
-        secure.MapPut("/tenants/{tenantId:guid}", (Delegate)UpdateTenantAsync);
-        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)GetOccupancyHistoryAsync);
-        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)AddOccupancyAsync);
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy/{assignmentId:guid}/close", (Delegate)CloseOccupancyAsync);
-        secure.MapGet("/properties/{propertyId:guid}/charges", (Delegate)GetPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPut("/properties/{propertyId:guid}/charges", (Delegate)PutPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPost("/properties/{propertyId:guid}/charges/{chargeType}/end", (Delegate)EndPropertyChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)GetUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)PutUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/charges/{chargeType}/end", (Delegate)EndUnitChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPost("/properties/{propertyId:guid}/billing-cycles", (Delegate)GenerateBillingCycleAsync);
+        secure.MapGet("/tenants", (Delegate)GetTenantsAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/tenants", (Delegate)CreateTenantAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/tenants/{tenantId:guid}", (Delegate)UpdateTenantAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)GetOccupancyHistoryAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)AddOccupancyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy/{assignmentId:guid}/close", (Delegate)CloseOccupancyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapGet("/properties/{propertyId:guid}/charges", (Delegate)GetPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/charges", (Delegate)PutPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/charges/{chargeType}/end", (Delegate)EndPropertyChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)GetUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)PutUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/charges/{chargeType}/end", (Delegate)EndUnitChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles", (Delegate)GenerateBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapGet("/properties/{propertyId:guid}/billing-cycles/{billingMonth}", (Delegate)GetBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/units/{unitId:guid}", (Delegate)GetUnitBillingStatementAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/tenants/{tenantId:guid}", (Delegate)GetTenantBillingStatementAsync);
@@ -59,8 +59,17 @@ public static class PrimeTectEndpointMapping
         secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/comparison", (Delegate)GetMonthlyBillingComparisonAsync);
         secure.MapPut("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/meter-readings", (Delegate)SaveBillingReadingsAsync);
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/submit", (Delegate)SubmitBillingCycleAsync);
-        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
-        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/approve", (Delegate)ApproveBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/approve", (Delegate)ApproveBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapGet("/properties/{propertyId:guid}/collection-reports/{billingMonth}", (Delegate)GetCollectionReportsAsync);
+        secure.MapPost("/properties/{propertyId:guid}/collection-reports", (Delegate)CreateCollectionReportAsync);
+        secure.MapPut("/collection-reports/{reportId:guid}", (Delegate)CorrectCollectionReportAsync);
+        secure.MapPost("/collection-reports/{reportId:guid}/return", (Delegate)ReturnCollectionReportAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
+        secure.MapPost("/collection-reports/{reportId:guid}/approve", (Delegate)ApproveCollectionReportAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
+        secure.MapPost("/collection-reports/{reportId:guid}/reversal", (Delegate)RequestCollectionReversalAsync);
+        secure.MapPost("/collection-reversals/{reversalId:guid}/resubmit", (Delegate)ResubmitCollectionReversalAsync);
+        secure.MapPost("/collection-reversals/{reversalId:guid}/return", (Delegate)ReturnCollectionReversalAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
+        secure.MapPost("/collection-reversals/{reversalId:guid}/approve", (Delegate)ApproveCollectionReversalAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
     }
 
     private static async Task<IResult> RegisterOwnerAsync(
@@ -158,7 +167,7 @@ public static class PrimeTectEndpointMapping
             return Results.BadRequest(new { message = "The invitation is invalid or expired." });
         }
 
-        if (invitation.Role is not (UserRole.Manager or UserRole.BuildingStaff))
+        if (invitation.Role is not (UserRole.Admin or UserRole.Manager or UserRole.BuildingStaff or UserRole.FinanceManager))
         {
             return Results.BadRequest(new { message = "This invitation role is not allowed." });
         }
@@ -228,7 +237,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        var include = includeArchived == true && actor.IsManagerOrAdmin;
+        var include = includeArchived == true && actor.IsAdmin;
         var properties = await AccessibleProperties(db, actor, include).OrderBy(item => item.Name).ToListAsync(cancellationToken);
         var responses = new List<PropertyResponse>();
         foreach (var property in properties)
@@ -252,7 +261,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        var include = includeArchived == true && actor.IsManagerOrAdmin;
+        var include = includeArchived == true && actor.IsAdmin;
         var property = await AccessibleProperties(db, actor, include).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
         return property is null
             ? Results.NotFound()
@@ -526,9 +535,9 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (request.Role is not (UserRole.Manager or UserRole.BuildingStaff))
+        if (request.Role is not (UserRole.Admin or UserRole.Manager or UserRole.BuildingStaff or UserRole.FinanceManager))
         {
-            return BadRequest("Only Manager and Building Staff invitations can be created here.");
+            return BadRequest("This invitation role is not allowed.");
         }
 
         if (!new EmailAddressAttribute().IsValid(request.Email))
@@ -571,7 +580,7 @@ public static class PrimeTectEndpointMapping
         }
 
         var property = await db.Properties.FirstOrDefaultAsync(item => item.Id == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
-        var staff = await db.Users.FirstOrDefaultAsync(user => user.Id == userId && user.OrganizationId == actor.OrganizationId && user.Role == UserRole.BuildingStaff && user.IsActive, cancellationToken);
+        var staff = await db.Users.FirstOrDefaultAsync(user => user.Id == userId && user.OrganizationId == actor.OrganizationId && user.Role != UserRole.Admin && user.IsActive, cancellationToken);
         if (property is null || staff is null)
         {
             return Results.NotFound();
@@ -1452,6 +1461,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!actor.CanSubmitReadings)
+        {
+            return Results.Forbid();
+        }
+
         var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
         if (cycle is null)
         {
@@ -1554,6 +1568,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!actor.CanSubmitReadings)
+        {
+            return Results.Forbid();
         }
 
         var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
@@ -1715,6 +1734,855 @@ public static class PrimeTectEndpointMapping
             return Results.Problem(detail: "The approval could not be persisted atomically. No approval was recorded.", statusCode: StatusCodes.Status500InternalServerError);
         }
     }
+
+    private static async Task<IResult> GetCollectionReportsAsync(
+        Guid propertyId,
+        DateOnly billingMonth,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return Results.NotFound();
+        }
+
+        var rows = await (
+            from report in db.CollectionReports.AsNoTracking()
+            join bill in db.BillingUnitBills.AsNoTracking() on report.BillingUnitBillId equals bill.Id
+            join cycle in db.BillingCycles.AsNoTracking() on bill.BillingCycleId equals cycle.Id
+            where report.OrganizationId == actor.OrganizationId
+                && cycle.OrganizationId == actor.OrganizationId
+                && cycle.PropertyId == propertyId
+                && cycle.BillingMonth == billingMonth
+                && cycle.Status == BillingCycleStatus.Approved
+                && (actor.IsAdmin || actor.IsFinanceManager || report.ReporterUserId == actor.UserId)
+             select new { report, bill, cycle })
+            .OrderByDescending(item => item.report.SubmittedAtUtc)
+            .Select(item => new CollectionQueryRow(item.report, item.bill, item.cycle))
+            .ToListAsync(cancellationToken);
+
+        var approvedBills = await (
+            from bill in db.BillingUnitBills.AsNoTracking()
+            join cycle in db.BillingCycles.AsNoTracking() on bill.BillingCycleId equals cycle.Id
+            where bill.OrganizationId == actor.OrganizationId
+                && cycle.OrganizationId == actor.OrganizationId
+                && cycle.PropertyId == propertyId
+                && cycle.BillingMonth == billingMonth
+                && cycle.Status == BillingCycleStatus.Approved
+            select bill)
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(await ToCollectionQueueResponseAsync(db, rows, approvedBills, cancellationToken));
+    }
+
+    private static async Task<IResult> CreateCollectionReportAsync(
+        Guid propertyId,
+        CollectionReportCreateRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanSubmitCollections)
+        {
+            return Results.Forbid();
+        }
+
+        if (request.SubmissionKey == Guid.Empty || request.AmountReceived <= 0m)
+        {
+            return BadRequest("A positive amount and a unique submission key are required.");
+        }
+
+        var existing = await db.CollectionReports.FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId && item.SubmissionKey == request.SubmissionKey, cancellationToken);
+        if (existing is not null)
+        {
+            if (existing.ReporterUserId != actor.UserId)
+            {
+                return Results.Conflict(new { message = "This submission key has already been used." });
+            }
+
+            var existingContext = await LoadCollectionContextAsync(db, actor, existing.Id, cancellationToken);
+            return existingContext is null
+                ? Results.Conflict(new { message = "This collection submission already exists but is no longer accessible." })
+                : Results.Ok(await ToCollectionReportResponseAsync(db, existingContext, cancellationToken));
+        }
+
+        var context = await LoadApprovedBillContextAsync(db, actor, propertyId, request.BillingUnitBillId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        var confirmed = await ConfirmedCollectionAmountAsync(db, context.Bill.Id, cancellationToken);
+        if (request.AmountReceived > context.Bill.Total - confirmed)
+        {
+            return BadRequest("The reported amount exceeds the bill's remaining balance.");
+        }
+
+        CollectionReport report;
+        try
+        {
+            report = new CollectionReport(
+                actor.OrganizationId,
+                context.Bill.Id,
+                context.Bill.OccupancyAssignmentId,
+                context.Bill.UnitId,
+                context.Bill.UnitNameSnapshot,
+                context.Bill.FloorNameSnapshot,
+                context.Bill.TenantId,
+                context.Bill.TenantNameSnapshot,
+                context.Bill.TenantPhoneSnapshot,
+                context.Cycle.BillingMonth,
+                context.Bill.Total,
+                actor.UserId,
+                request.AmountReceived,
+                request.ReceivedDate,
+                request.PaymentMethod,
+                request.ReferenceNote,
+                request.SubmissionKey);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.CollectionReports.Add(report);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(
+                actor.OrganizationId,
+                report.Id,
+                null,
+                actor.UserId,
+                CollectionAuditAction.Submitted,
+                request.ReferenceNote,
+                null,
+                JsonSerializer.Serialize(CollectionSnapshot(report))));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var saved = await LoadCollectionContextAsync(db, actor, report.Id, cancellationToken);
+            return Results.Created($"/api/collection-reports/{report.Id}", await ToCollectionReportResponseAsync(db, saved!, cancellationToken));
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This collection report was already submitted. Refresh before retrying." });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The collection report could not be persisted atomically.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static async Task<IResult> CorrectCollectionReportAsync(
+        Guid reportId,
+        CollectionReportCorrectionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanSubmitCollections && !actor.IsAdmin)
+        {
+            return Results.Forbid();
+        }
+
+        var context = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (!actor.IsAdmin && context.Report.ReporterUserId != actor.UserId)
+        {
+            return Results.Forbid();
+        }
+
+        if (context.Report.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This collection report changed since it was loaded. Refresh before correcting it." });
+        }
+
+        var confirmed = await ConfirmedCollectionAmountAsync(db, context.Bill.Id, cancellationToken);
+        if (request.AmountReceived > context.Bill.Total - confirmed)
+        {
+            return BadRequest("The corrected amount exceeds the bill's remaining balance.");
+        }
+
+        var before = CollectionSnapshot(context.Report);
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            context.Report.Correct(actor.UserId, request.AmountReceived, request.ReceivedDate, request.PaymentMethod, request.ReferenceNote);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(
+                actor.OrganizationId,
+                context.Report.Id,
+                null,
+                actor.UserId,
+                CollectionAuditAction.Corrected,
+                request.Reason,
+                JsonSerializer.Serialize(before),
+                JsonSerializer.Serialize(CollectionSnapshot(context.Report))));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var corrected = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+            return Results.Ok(await ToCollectionReportResponseAsync(db, corrected!, cancellationToken));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This collection report changed concurrently. Refresh before correcting it." });
+        }
+        catch (InvalidOperationException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+    }
+
+    private static async Task<IResult> ReturnCollectionReportAsync(
+        Guid reportId,
+        CollectionActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanReviewCollections)
+        {
+            return Results.Forbid();
+        }
+
+        var context = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (context.Report.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This collection report changed since it was loaded. Refresh before returning it." });
+        }
+
+        var before = CollectionSnapshot(context.Report);
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            context.Report.Return(actor.UserId, request.Reason ?? string.Empty);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(actor.OrganizationId, context.Report.Id, null, actor.UserId, CollectionAuditAction.Returned, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(CollectionSnapshot(context.Report))));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var returned = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+            return Results.Ok(await ToCollectionReportResponseAsync(db, returned!, cancellationToken));
+        }
+        catch (ArgumentException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This collection report changed concurrently. Refresh before returning it." });
+        }
+    }
+
+    private static async Task<IResult> ApproveCollectionReportAsync(
+        Guid reportId,
+        CollectionActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanReviewCollections)
+        {
+            return Results.Forbid();
+        }
+
+        var context = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (context.Report.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This collection report changed since it was loaded. Refresh before approving it." });
+        }
+
+        if (context.Report.Status != CollectionReportStatus.Pending)
+        {
+            return BadRequest("Only pending collection reports can be approved.");
+        }
+
+        if (context.Report.LastChangedByUserId == actor.UserId)
+        {
+            return Results.Forbid();
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var lockedBill = await LockBillingUnitBillAsync(db, context.Bill.Id, cancellationToken);
+            if (lockedBill is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.NotFound();
+            }
+
+            var report = await db.CollectionReports.FirstAsync(item => item.Id == reportId, cancellationToken);
+            if (report.Version != request.ExpectedVersion)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.Conflict(new { message = "This collection report changed concurrently. Refresh before approving it." });
+            }
+
+            if (report.Status != CollectionReportStatus.Pending)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return BadRequest("Only pending collection reports can be approved.");
+            }
+
+            if (report.LastChangedByUserId == actor.UserId)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.Forbid();
+            }
+
+            var confirmed = await ConfirmedCollectionAmountAsync(db, lockedBill.Id, cancellationToken);
+            if (report.AmountReceived > lockedBill.Total - confirmed)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return BadRequest("The reported amount exceeds the bill's remaining balance.");
+            }
+
+            var before = CollectionSnapshot(report);
+            report.Approve(actor.UserId);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(actor.OrganizationId, report.Id, null, actor.UserId, CollectionAuditAction.Approved, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(CollectionSnapshot(report))));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var approved = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+            return Results.Ok(await ToCollectionReportResponseAsync(db, approved!, cancellationToken));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This collection report changed concurrently. Refresh before approving it." });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The collection approval could not be persisted atomically. No balance change was recorded.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static async Task<IResult> RequestCollectionReversalAsync(
+        Guid reportId,
+        CollectionActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanSubmitCollections && !actor.IsAdmin)
+        {
+            return Results.Forbid();
+        }
+
+        var context = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (!actor.IsAdmin && context.Report.ReporterUserId != actor.UserId)
+        {
+            return Results.Forbid();
+        }
+
+        if (context.Report.Status != CollectionReportStatus.Approved)
+        {
+            return BadRequest("Only approved collection reports can be reversed.");
+        }
+
+        if (context.Report.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This collection report changed since it was loaded. Refresh before requesting a reversal." });
+        }
+
+        var existing = await db.CollectionReversals.FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId && item.CollectionReportId == reportId, cancellationToken);
+        if (existing is not null)
+        {
+            return Results.Conflict(new { message = "This approved collection already has a reversal workflow." });
+        }
+
+        CollectionReversal reversal;
+        try
+        {
+            reversal = new CollectionReversal(actor.OrganizationId, reportId, actor.UserId, request.Reason ?? string.Empty);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.CollectionReversals.Add(reversal);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(actor.OrganizationId, reportId, reversal.Id, actor.UserId, CollectionAuditAction.ReversalRequested, request.Reason, null, JsonSerializer.Serialize(new { reversal.Id, reversal.Status, reversal.Reason })));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var requested = await LoadCollectionContextAsync(db, actor, reportId, cancellationToken);
+            return Results.Ok(await ToCollectionReportResponseAsync(db, requested!, cancellationToken));
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This approved collection already has a reversal workflow." });
+        }
+    }
+
+    private static async Task<IResult> ResubmitCollectionReversalAsync(
+        Guid reversalId,
+        CollectionActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanSubmitCollections && !actor.IsAdmin)
+        {
+            return Results.Forbid();
+        }
+
+        var reversal = await db.CollectionReversals.FirstOrDefaultAsync(item => item.Id == reversalId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (reversal is null)
+        {
+            return Results.NotFound();
+        }
+
+        var context = await LoadCollectionContextAsync(db, actor, reversal.CollectionReportId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (!actor.IsAdmin && (reversal.RequestedByUserId != actor.UserId || context.Report.ReporterUserId != actor.UserId))
+        {
+            return Results.Forbid();
+        }
+
+        if (reversal.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This reversal changed since it was loaded. Refresh before resubmitting it." });
+        }
+
+        if (reversal.Status != CollectionReversalStatus.Returned)
+        {
+            return BadRequest("Only returned reversals can be resubmitted.");
+        }
+
+        var before = new { reversal.Status, reversal.Version, reversal.ReturnReason };
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            reversal.Resubmit(actor.UserId, request.Reason);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(actor.OrganizationId, context.Report.Id, reversal.Id, actor.UserId, CollectionAuditAction.ReversalRequested, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(new { reversal.Status, reversal.Version, reversal.Reason })));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var resubmitted = await LoadCollectionContextAsync(db, actor, context.Report.Id, cancellationToken);
+            return Results.Ok(await ToCollectionReportResponseAsync(db, resubmitted!, cancellationToken));
+        }
+        catch (ArgumentException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+    }
+
+    private static async Task<IResult> ReturnCollectionReversalAsync(
+        Guid reversalId,
+        CollectionActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanReviewCollections)
+        {
+            return Results.Forbid();
+        }
+
+        var reversal = await db.CollectionReversals.FirstOrDefaultAsync(item => item.Id == reversalId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (reversal is null)
+        {
+            return Results.NotFound();
+        }
+
+        var context = await LoadCollectionContextAsync(db, actor, reversal.CollectionReportId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (reversal.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This reversal changed since it was loaded. Refresh before returning it." });
+        }
+
+        var before = new { reversal.Status, reversal.Version, reversal.ReturnReason };
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            reversal.Return(actor.UserId, request.Reason ?? string.Empty);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(actor.OrganizationId, context.Report.Id, reversal.Id, actor.UserId, CollectionAuditAction.ReversalReturned, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(new { reversal.Status, reversal.Version, reversal.ReturnReason })));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var returned = await LoadCollectionContextAsync(db, actor, context.Report.Id, cancellationToken);
+            return Results.Ok(await ToCollectionReportResponseAsync(db, returned!, cancellationToken));
+        }
+        catch (ArgumentException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+    }
+
+    private static async Task<IResult> ApproveCollectionReversalAsync(
+        Guid reversalId,
+        CollectionActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.CanReviewCollections)
+        {
+            return Results.Forbid();
+        }
+
+        var reversal = await db.CollectionReversals.FirstOrDefaultAsync(item => item.Id == reversalId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (reversal is null)
+        {
+            return Results.NotFound();
+        }
+
+        var context = await LoadCollectionContextAsync(db, actor, reversal.CollectionReportId, cancellationToken);
+        if (context is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (reversal.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This reversal changed since it was loaded. Refresh before approving it." });
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var lockedBill = await LockBillingUnitBillAsync(db, context.Bill.Id, cancellationToken);
+            if (lockedBill is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.NotFound();
+            }
+
+            var currentReversal = await db.CollectionReversals.FirstAsync(item => item.Id == reversalId, cancellationToken);
+            if (currentReversal.Version != request.ExpectedVersion)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.Conflict(new { message = "This reversal changed concurrently. Refresh before approving it." });
+            }
+
+            if (await db.CollectionReversals.AnyAsync(item => item.CollectionReportId == context.Report.Id && item.Status == CollectionReversalStatus.Approved, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.Conflict(new { message = "This collection has already been reversed." });
+            }
+
+            var before = new { currentReversal.Status, currentReversal.Version };
+            currentReversal.Approve(actor.UserId);
+            db.CollectionAuditEntries.Add(new CollectionAuditEntry(actor.OrganizationId, context.Report.Id, currentReversal.Id, actor.UserId, CollectionAuditAction.ReversalApproved, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(new { currentReversal.Status, currentReversal.Version })));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            var approved = await LoadCollectionContextAsync(db, actor, context.Report.Id, cancellationToken);
+            return Results.Ok(await ToCollectionReportResponseAsync(db, approved!, cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: exception.Message, statusCode: StatusCodes.Status403Forbidden);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This reversal changed concurrently. Refresh before approving it." });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The reversal approval could not be persisted atomically. No balance change was recorded.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static async Task<ApprovedBillContext?> LoadApprovedBillContextAsync(
+        PropertyManagementDbContext db,
+        RequestUser actor,
+        Guid propertyId,
+        Guid billingUnitBillId,
+        CancellationToken cancellationToken)
+    {
+        var property = await AccessibleProperties(db, actor, includeArchived: false)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return null;
+        }
+
+        var result = await (
+            from bill in db.BillingUnitBills
+            join cycle in db.BillingCycles on bill.BillingCycleId equals cycle.Id
+            where bill.Id == billingUnitBillId
+                && bill.OrganizationId == actor.OrganizationId
+                && cycle.OrganizationId == actor.OrganizationId
+                && cycle.PropertyId == propertyId
+                && cycle.Status == BillingCycleStatus.Approved
+            select new ApprovedBillContext(bill, cycle))
+            .FirstOrDefaultAsync(cancellationToken);
+        return result;
+    }
+
+    private static async Task<CollectionContext?> LoadCollectionContextAsync(
+        PropertyManagementDbContext db,
+        RequestUser actor,
+        Guid reportId,
+        CancellationToken cancellationToken)
+    {
+        var report = await db.CollectionReports.FirstOrDefaultAsync(item => item.Id == reportId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (report is null)
+        {
+            return null;
+        }
+
+        var bill = await db.BillingUnitBills.FirstOrDefaultAsync(item => item.Id == report.BillingUnitBillId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        var cycle = bill is null
+            ? null
+            : await db.BillingCycles.FirstOrDefaultAsync(item => item.Id == bill.BillingCycleId && item.OrganizationId == actor.OrganizationId && item.Status == BillingCycleStatus.Approved, cancellationToken);
+        var property = cycle is null
+            ? null
+            : await AccessibleProperties(db, actor, includeArchived: false).FirstOrDefaultAsync(item => item.Id == cycle.PropertyId, cancellationToken);
+        return bill is null || cycle is null || property is null
+            ? null
+            : new CollectionContext(report, bill, cycle);
+    }
+
+    private static async Task<CollectionQueueResponse> ToCollectionQueueResponseAsync(
+        PropertyManagementDbContext db,
+        IReadOnlyList<CollectionQueryRow> rows,
+        IReadOnlyList<BillingUnitBill> approvedBills,
+        CancellationToken cancellationToken)
+    {
+        var billIds = approvedBills.Select(item => item.Id).ToArray();
+        var allReports = billIds.Length == 0
+            ? []
+            : await db.CollectionReports.AsNoTracking().Where(item => billIds.Contains(item.BillingUnitBillId)).ToListAsync(cancellationToken);
+        var reversedReportIds = await db.CollectionReversals.AsNoTracking()
+            .Where(item => allReports.Select(report => report.Id).Contains(item.CollectionReportId) && item.Status == CollectionReversalStatus.Approved)
+            .Select(item => item.CollectionReportId)
+            .ToListAsync(cancellationToken);
+        var confirmedByBill = allReports
+            .Where(item => item.Status == CollectionReportStatus.Approved && !reversedReportIds.Contains(item.Id))
+            .GroupBy(item => item.BillingUnitBillId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => item.AmountReceived));
+        var pendingByBill = allReports
+            .Where(item => item.Status is CollectionReportStatus.Pending or CollectionReportStatus.Returned)
+            .GroupBy(item => item.BillingUnitBillId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => item.AmountReceived));
+
+        var items = new List<CollectionReportResponse>(rows.Count);
+        foreach (var row in rows)
+        {
+            items.Add(await ToCollectionReportResponseAsync(db, new CollectionContext(row.Report, row.Bill, row.Cycle), cancellationToken, confirmedByBill.GetValueOrDefault(row.Bill.Id), reversedReportIds.Contains(row.Report.Id)));
+        }
+
+        var billedTotal = approvedBills.Sum(item => item.Total);
+        var confirmedTotal = confirmedByBill.Values.Sum();
+        var pendingTotal = pendingByBill.Values.Sum();
+        return new CollectionQueueResponse(items, billedTotal, pendingTotal, confirmedTotal, Math.Max(0m, billedTotal - confirmedTotal));
+    }
+
+    private static async Task<CollectionReportResponse> ToCollectionReportResponseAsync(
+        PropertyManagementDbContext db,
+        CollectionContext context,
+        CancellationToken cancellationToken,
+        decimal? confirmedOverride = null,
+        bool? reversedOverride = null)
+    {
+        var confirmed = confirmedOverride ?? await ConfirmedCollectionAmountAsync(db, context.Bill.Id, cancellationToken);
+        var reversal = await db.CollectionReversals.AsNoTracking()
+            .Where(item => item.OrganizationId == context.Report.OrganizationId && item.CollectionReportId == context.Report.Id)
+            .OrderByDescending(item => item.LastChangedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+        var reporterName = await db.Users.AsNoTracking()
+            .Where(user => user.Id == context.Report.ReporterUserId && user.OrganizationId == context.Report.OrganizationId)
+            .Select(user => user.FullName)
+            .FirstOrDefaultAsync(cancellationToken) ?? "Unknown reporter";
+        var audit = await db.CollectionAuditEntries.AsNoTracking()
+            .Where(item => item.CollectionReportId == context.Report.Id)
+            .OrderBy(item => item.OccurredAtUtc)
+            .Select(item => new CollectionAuditResponse(item.Id, item.CollectionReversalId, item.ActorUserId, item.Action, item.OccurredAtUtc, item.Reason, item.BeforeJson, item.AfterJson))
+            .ToListAsync(cancellationToken);
+        var isReversed = reversedOverride ?? reversal?.Status == CollectionReversalStatus.Approved;
+        return new CollectionReportResponse(
+            context.Report.Id,
+            context.Report.BillingUnitBillId,
+            context.Cycle.Id,
+            context.Cycle.PropertyId,
+            context.Cycle.BillingMonth,
+            context.Report.UnitId,
+            context.Report.UnitNameSnapshot,
+            context.Report.FloorNameSnapshot,
+            context.Report.OccupancyAssignmentIdSnapshot,
+            context.Report.TenantIdSnapshot,
+            context.Report.TenantNameSnapshot,
+            context.Report.TenantPhoneSnapshot,
+            context.Report.BilledAmountSnapshot,
+            confirmed,
+            Math.Max(0m, context.Report.BilledAmountSnapshot - confirmed),
+            context.Report.AmountReceived,
+            context.Report.ReceivedDate,
+            context.Report.PaymentMethod,
+            context.Report.ReferenceNote,
+            context.Report.ReporterUserId,
+            reporterName,
+            context.Report.SubmittedAtUtc,
+            context.Report.Status,
+            context.Report.Version,
+            context.Report.ReturnReason,
+            context.Report.ApprovedByUserId,
+            context.Report.ApprovedAtUtc,
+            isReversed,
+            reversal?.Status,
+            reversal?.Id,
+             reversal?.Version,
+            reversal?.Reason,
+            audit);
+    }
+
+    private static async Task<decimal> ConfirmedCollectionAmountAsync(PropertyManagementDbContext db, Guid billingUnitBillId, CancellationToken cancellationToken)
+    {
+        var reversedReportIds = db.CollectionReversals
+            .Where(item => item.CollectionReportId != Guid.Empty && item.Status == CollectionReversalStatus.Approved)
+            .Select(item => item.CollectionReportId);
+        return await db.CollectionReports
+            .Where(item => item.BillingUnitBillId == billingUnitBillId && item.Status == CollectionReportStatus.Approved && !reversedReportIds.Contains(item.Id))
+            .Select(item => (decimal?)item.AmountReceived)
+            .SumAsync(cancellationToken) ?? 0m;
+    }
+
+    private static async Task<BillingUnitBill?> LockBillingUnitBillAsync(PropertyManagementDbContext db, Guid billingUnitBillId, CancellationToken cancellationToken)
+    {
+        if (db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return await db.BillingUnitBills
+                .FromSqlInterpolated($"SELECT * FROM \"billing_unit_bills\" WHERE \"Id\" = {billingUnitBillId} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken);
+        }
+
+        return await db.BillingUnitBills.SingleOrDefaultAsync(item => item.Id == billingUnitBillId, cancellationToken);
+    }
+
+    private static object CollectionSnapshot(CollectionReport report) => new
+    {
+        report.Id,
+        report.BillingUnitBillId,
+        report.AmountReceived,
+        report.ReceivedDate,
+        report.PaymentMethod,
+        report.ReferenceNote,
+        report.Status,
+        report.Version,
+        report.LastChangedByUserId,
+    };
+
+    private sealed record ApprovedBillContext(BillingUnitBill Bill, BillingCycle Cycle);
+
+    private sealed record CollectionContext(CollectionReport Report, BillingUnitBill Bill, BillingCycle Cycle);
+
+    private sealed record CollectionQueryRow(CollectionReport Report, BillingUnitBill Bill, BillingCycle Cycle);
 
     private static async Task<(Property? Property, BillingCycle? Cycle)> LoadApprovedReportCycleAsync(
         PropertyManagementDbContext db,
@@ -1938,7 +2806,7 @@ public static class PrimeTectEndpointMapping
         CancellationToken cancellationToken) =>
         await db.BillingCycles.FirstOrDefaultAsync(cycle => cycle.Id == billingCycleId && cycle.PropertyId == propertyId && cycle.OrganizationId == actor.OrganizationId
             && db.Properties.Any(property => property.Id == propertyId && property.OrganizationId == actor.OrganizationId && !property.IsArchived)
-            && (!actor.IsStaff || db.StaffPropertyAssignments.Any(assignment => assignment.OrganizationId == actor.OrganizationId && assignment.UserId == actor.UserId && assignment.PropertyId == propertyId)), cancellationToken);
+            && (actor.IsAdmin || db.StaffPropertyAssignments.Any(assignment => assignment.OrganizationId == actor.OrganizationId && assignment.UserId == actor.UserId && assignment.PropertyId == propertyId)), cancellationToken);
 
     private static async Task<BillingCycleResponse> ToBillingCycleResponseAsync(PropertyManagementDbContext db, Guid billingCycleId, CancellationToken cancellationToken)
     {
@@ -2102,16 +2970,16 @@ public static class PrimeTectEndpointMapping
     private static IQueryable<Property> AccessibleProperties(PropertyManagementDbContext db, RequestUser actor, bool includeArchived) =>
         db.Properties.Where(property => property.OrganizationId == actor.OrganizationId
             && (includeArchived || !property.IsArchived)
-            && (!actor.IsStaff || db.StaffPropertyAssignments.Any(assignment => assignment.OrganizationId == actor.OrganizationId && assignment.UserId == actor.UserId && assignment.PropertyId == property.Id)));
+            && (actor.IsAdmin || db.StaffPropertyAssignments.Any(assignment => assignment.OrganizationId == actor.OrganizationId && assignment.UserId == actor.UserId && assignment.PropertyId == property.Id)));
 
     private static IQueryable<Tenant> AccessibleTenants(PropertyManagementDbContext db, RequestUser actor) =>
         db.Tenants.Where(tenant => tenant.OrganizationId == actor.OrganizationId
-            && (!actor.IsStaff || db.OccupancyAssignments.Any(assignment => assignment.TenantId == tenant.Id && db.Units.Any(unit => unit.Id == assignment.UnitId && db.StaffPropertyAssignments.Any(staff => staff.UserId == actor.UserId && staff.PropertyId == unit.PropertyId)))));
+            && (actor.IsAdmin || db.OccupancyAssignments.Any(assignment => assignment.TenantId == tenant.Id && db.Units.Any(unit => unit.Id == assignment.UnitId && db.StaffPropertyAssignments.Any(staff => staff.UserId == actor.UserId && staff.PropertyId == unit.PropertyId)))));
 
     private static async Task<Unit?> AccessibleUnitAsync(PropertyManagementDbContext db, RequestUser actor, Guid propertyId, Guid unitId, CancellationToken cancellationToken) =>
         await db.Units.FirstOrDefaultAsync(unit => unit.Id == unitId && unit.PropertyId == propertyId && unit.OrganizationId == actor.OrganizationId
             && db.Properties.Any(property => property.Id == propertyId && property.OrganizationId == actor.OrganizationId && !property.IsArchived)
-            && (!actor.IsStaff || db.StaffPropertyAssignments.Any(assignment => assignment.OrganizationId == actor.OrganizationId && assignment.UserId == actor.UserId && assignment.PropertyId == propertyId)), cancellationToken);
+            && (actor.IsAdmin || db.StaffPropertyAssignments.Any(assignment => assignment.OrganizationId == actor.OrganizationId && assignment.UserId == actor.UserId && assignment.PropertyId == propertyId)), cancellationToken);
 
     private static async Task<PropertyResponse> ToPropertyResponseAsync(PropertyManagementDbContext db, Property property, bool includeArchived, CancellationToken cancellationToken)
     {

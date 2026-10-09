@@ -56,6 +56,76 @@ public sealed record BillingReadingsRequest(long ExpectedVersion, IReadOnlyList<
 
 public sealed record BillingActionRequest(long ExpectedVersion, string? Reason);
 
+public sealed record CollectionReportCreateRequest(
+    Guid BillingUnitBillId,
+    decimal AmountReceived,
+    DateOnly ReceivedDate,
+    PaymentMethod PaymentMethod,
+    string? ReferenceNote,
+    Guid SubmissionKey);
+
+public sealed record CollectionReportCorrectionRequest(
+    long ExpectedVersion,
+    decimal AmountReceived,
+    DateOnly ReceivedDate,
+    PaymentMethod PaymentMethod,
+    string? ReferenceNote,
+    string? Reason);
+
+public sealed record CollectionActionRequest(long ExpectedVersion, string? Reason);
+
+public sealed record CollectionReportResponse(
+    Guid Id,
+    Guid BillingUnitBillId,
+    Guid BillingCycleId,
+    Guid PropertyId,
+    DateOnly BillingMonth,
+    Guid UnitId,
+    string UnitName,
+    string? FloorName,
+    Guid? OccupancyAssignmentId,
+    Guid? TenantId,
+    string? TenantName,
+    string? TenantPhone,
+    decimal BilledAmount,
+    decimal ConfirmedCollectedAmount,
+    decimal RemainingBalance,
+    decimal AmountReceived,
+    DateOnly ReceivedDate,
+    PaymentMethod PaymentMethod,
+    string? ReferenceNote,
+    Guid ReporterUserId,
+    string ReporterName,
+    DateTimeOffset SubmittedAtUtc,
+    CollectionReportStatus Status,
+    long Version,
+    string? ReturnReason,
+    Guid? ApprovedByUserId,
+    DateTimeOffset? ApprovedAtUtc,
+    bool IsReversed,
+    CollectionReversalStatus? ReversalStatus,
+    Guid? ReversalId,
+    long? ReversalVersion,
+    string? ReversalReason,
+    IReadOnlyList<CollectionAuditResponse> Audit);
+
+public sealed record CollectionAuditResponse(
+    Guid Id,
+    Guid? CollectionReversalId,
+    Guid ActorUserId,
+    CollectionAuditAction Action,
+    DateTimeOffset OccurredAtUtc,
+    string? Reason,
+    string? Before,
+    string? After);
+
+public sealed record CollectionQueueResponse(
+    IReadOnlyList<CollectionReportResponse> Items,
+    decimal BilledTotal,
+    decimal PendingReportedTotal,
+    decimal ConfirmedCollectedTotal,
+    decimal OutstandingTotal);
+
 public sealed record ApiUserResponse(Guid Id, string Email, string FullName, UserRole Role, Guid OrganizationId);
 
 public sealed record UnitResponse(Guid Id, string Name, bool IsEnabled, bool IsArchived, OccupancyStatus OccupancyStatus);
