@@ -89,9 +89,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 5 || pending.Any())
+            if (applied.Count() != 7 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected five applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected seven applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)

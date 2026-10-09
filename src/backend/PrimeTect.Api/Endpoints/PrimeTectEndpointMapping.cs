@@ -29,29 +29,29 @@ public static class PrimeTectEndpointMapping
         secure.MapGet("/properties", (Delegate)GetPropertiesAsync);
         secure.MapGet("/properties/{propertyId:guid}", (Delegate)GetPropertyAsync);
         secure.MapPost("/properties/preview", (Delegate)PreviewProperty).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/properties", (Delegate)CreatePropertyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/properties/{propertyId:guid}", (Delegate)UpdatePropertyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/properties/{propertyId:guid}/floors", (Delegate)AddFloorAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/properties/{propertyId:guid}/floors/{floorId:guid}", (Delegate)UpdateFloorAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}", (Delegate)UpdateUnitAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy-status", (Delegate)UpdateOccupancyStatusAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties", (Delegate)CreatePropertyAsync);
+        secure.MapPut("/properties/{propertyId:guid}", (Delegate)UpdatePropertyAsync);
+        secure.MapPost("/properties/{propertyId:guid}/floors", (Delegate)AddFloorAsync);
+        secure.MapPut("/properties/{propertyId:guid}/floors/{floorId:guid}", (Delegate)UpdateFloorAsync);
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}", (Delegate)UpdateUnitAsync);
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy-status", (Delegate)UpdateOccupancyStatusAsync);
         secure.MapGet("/staff", (Delegate)GetStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/staff/invitations", (Delegate)CreateInvitationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/properties/{propertyId:guid}/staff/{userId:guid}", (Delegate)AssignStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapDelete("/properties/{propertyId:guid}/staff/{userId:guid}", (Delegate)RemoveStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapGet("/tenants", (Delegate)GetTenantsAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/tenants", (Delegate)CreateTenantAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/tenants/{tenantId:guid}", (Delegate)UpdateTenantAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)GetOccupancyHistoryAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)AddOccupancyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy/{assignmentId:guid}/close", (Delegate)CloseOccupancyAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapGet("/properties/{propertyId:guid}/charges", (Delegate)GetPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/properties/{propertyId:guid}/charges", (Delegate)PutPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/properties/{propertyId:guid}/charges/{chargeType}/end", (Delegate)EndPropertyChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)GetUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)PutUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/charges/{chargeType}/end", (Delegate)EndUnitChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/properties/{propertyId:guid}/billing-cycles", (Delegate)GenerateBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
+        secure.MapGet("/tenants", (Delegate)GetTenantsAsync);
+        secure.MapPost("/tenants", (Delegate)CreateTenantAsync);
+        secure.MapPut("/tenants/{tenantId:guid}", (Delegate)UpdateTenantAsync);
+        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)GetOccupancyHistoryAsync);
+        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy", (Delegate)AddOccupancyAsync);
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy/{assignmentId:guid}/close", (Delegate)CloseOccupancyAsync);
+        secure.MapGet("/properties/{propertyId:guid}/charges", (Delegate)GetPropertyChargesAsync);
+        secure.MapPut("/properties/{propertyId:guid}/charges", (Delegate)PutPropertyChargesAsync);
+        secure.MapPost("/properties/{propertyId:guid}/charges/{chargeType}/end", (Delegate)EndPropertyChargeAsync);
+        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)GetUnitChargesAsync);
+        secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)PutUnitChargesAsync);
+        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/charges/{chargeType}/end", (Delegate)EndUnitChargeAsync);
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles", (Delegate)GenerateBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-cycles/{billingMonth}", (Delegate)GetBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/units/{unitId:guid}", (Delegate)GetUnitBillingStatementAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/tenants/{tenantId:guid}", (Delegate)GetTenantBillingStatementAsync);
@@ -59,17 +59,19 @@ public static class PrimeTectEndpointMapping
         secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/comparison", (Delegate)GetMonthlyBillingComparisonAsync);
         secure.MapPut("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/meter-readings", (Delegate)SaveBillingReadingsAsync);
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/submit", (Delegate)SubmitBillingCycleAsync);
-        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
-        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/approve", (Delegate)ApproveBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync);
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/approve", (Delegate)ApproveBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/collection-reports/{billingMonth}", (Delegate)GetCollectionReportsAsync);
         secure.MapPost("/properties/{propertyId:guid}/collection-reports", (Delegate)CreateCollectionReportAsync);
         secure.MapPut("/collection-reports/{reportId:guid}", (Delegate)CorrectCollectionReportAsync);
-        secure.MapPost("/collection-reports/{reportId:guid}/return", (Delegate)ReturnCollectionReportAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
-        secure.MapPost("/collection-reports/{reportId:guid}/approve", (Delegate)ApproveCollectionReportAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
+        secure.MapPost("/collection-reports/{reportId:guid}/return", (Delegate)ReturnCollectionReportAsync);
+        secure.MapPost("/collection-reports/{reportId:guid}/approve", (Delegate)ApproveCollectionReportAsync);
         secure.MapPost("/collection-reports/{reportId:guid}/reversal", (Delegate)RequestCollectionReversalAsync);
         secure.MapPost("/collection-reversals/{reversalId:guid}/resubmit", (Delegate)ResubmitCollectionReversalAsync);
-        secure.MapPost("/collection-reversals/{reversalId:guid}/return", (Delegate)ReturnCollectionReversalAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
-        secure.MapPost("/collection-reversals/{reversalId:guid}/approve", (Delegate)ApproveCollectionReversalAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.FinanceManager)));
+        secure.MapPost("/collection-reversals/{reversalId:guid}/return", (Delegate)ReturnCollectionReversalAsync);
+        secure.MapPost("/collection-reversals/{reversalId:guid}/approve", (Delegate)ApproveCollectionReversalAsync);
+        secure.MapGet("/role-permissions", (Delegate)GetRolePermissionsAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/role-permissions", (Delegate)UpdateRolePermissionsAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
     }
 
     private static async Task<IResult> RegisterOwnerAsync(
@@ -92,6 +94,7 @@ public static class PrimeTectEndpointMapping
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var organization = new Organization(request.OrganizationName);
         db.Organizations.Add(organization);
+        await OrganizationPermissionAuthorization.EnsureDefaultsAsync(db, organization.Id, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
 
         var user = NewUser(organization.Id, request.Email, request.FullName, UserRole.Admin);
@@ -216,7 +219,145 @@ public static class PrimeTectEndpointMapping
         var organization = await db.Organizations.AsNoTracking().FirstOrDefaultAsync(item => item.Id == actor.OrganizationId);
         return user is null || organization is null
             ? Results.Unauthorized()
-            : Results.Ok(new { user = ToUserResponse(user), organization = new { organization.Id, organization.Name } });
+            : Results.Ok(new
+            {
+                user = ToUserResponse(user),
+                organization = new { organization.Id, organization.Name },
+                permissions = (await OrganizationPermissionAuthorization.GetAsync(db, actor, CancellationToken.None))
+                    .ToDictionary(pair => pair.Key.ToString(), pair => pair.Value),
+            });
+    }
+
+    private static async Task<IResult> GetRolePermissionsAsync(
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        await OrganizationPermissionAuthorization.EnsureDefaultsAsync(db, actor.OrganizationId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        var rows = await db.OrganizationRolePermissions.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(new[] { UserRole.Manager, UserRole.BuildingStaff, UserRole.FinanceManager }
+            .Select(role => new RolePermissionConfigurationResponse(
+                role,
+                Enum.GetValues<OrganizationPermission>().ToDictionary(
+                    permission => permission.ToString(),
+                    permission => rows.FirstOrDefault(item => item.Role == role && item.Permission == permission)?.IsEnabled
+                        ?? OrganizationPermissionDefaults.ForRole(role)[permission])))
+            .ToList());
+    }
+
+    private static async Task<IResult> UpdateRolePermissionsAsync(
+        RolePermissionUpdateRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (request.Role == UserRole.Admin)
+        {
+            return BadRequest("Admin access is always protected and cannot be disabled here.");
+        }
+
+        if (request.Role is not (UserRole.Manager or UserRole.BuildingStaff or UserRole.FinanceManager))
+        {
+            return BadRequest("Only Building Manager, Building Staff, and Finance Manager permissions can be configured.");
+        }
+
+        var parsed = new Dictionary<OrganizationPermission, bool>();
+        foreach (var pair in request.Permissions ?? new Dictionary<string, bool>())
+        {
+            if (!Enum.TryParse<OrganizationPermission>(pair.Key, ignoreCase: true, out var permission))
+            {
+                return BadRequest($"Unknown permission '{pair.Key}'.");
+            }
+
+            parsed[permission] = pair.Value;
+        }
+
+        await OrganizationPermissionAuthorization.EnsureDefaultsAsync(db, actor.OrganizationId, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        var current = await db.OrganizationRolePermissions
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.Role == request.Role)
+            .ToListAsync(cancellationToken);
+        var before = current.ToDictionary(item => item.Permission.ToString(), item => item.IsEnabled);
+        foreach (var permission in Enum.GetValues<OrganizationPermission>())
+        {
+            var row = current.First(item => item.Permission == permission);
+            if (parsed.TryGetValue(permission, out var isEnabled))
+            {
+                row.SetEnabled(isEnabled);
+            }
+        }
+
+        var effective = current.ToDictionary(item => item.Permission.ToString(), item => item.IsEnabled);
+        var dependencyError = ValidatePermissionDependencies(effective);
+        if (dependencyError is not null)
+        {
+            return BadRequest(dependencyError);
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.OrganizationAuditEntries.Add(new OrganizationAuditEntry(
+                actor.OrganizationId,
+                actor.UserId,
+                "RolePermissionsChanged",
+                request.Reason,
+                JsonSerializer.Serialize(before),
+                JsonSerializer.Serialize(effective)));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Ok(new RolePermissionConfigurationResponse(request.Role, effective));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "Role permissions changed concurrently. Refresh and try again." });
+        }
+    }
+
+    private static string? ValidatePermissionDependencies(IReadOnlyDictionary<string, bool> permissions)
+    {
+        bool Enabled(OrganizationPermission permission) => permissions.GetValueOrDefault(permission.ToString());
+        if (Enabled(OrganizationPermission.EditMeterReadings) && !Enabled(OrganizationPermission.ViewMeterReadings))
+        {
+            return "Entering readings requires permission to view meter readings.";
+        }
+
+        if (Enabled(OrganizationPermission.SubmitMeterReadings) && (!Enabled(OrganizationPermission.EditMeterReadings) || !Enabled(OrganizationPermission.ViewMeterReadings)))
+        {
+            return "Submitting readings requires both edit and view meter-reading permissions.";
+        }
+
+        if (Enabled(OrganizationPermission.ReportCollections) && !Enabled(OrganizationPermission.ViewApprovedBills))
+        {
+            return "Reporting collections requires permission to view approved bills.";
+        }
+
+        if ((Enabled(OrganizationPermission.ReviewCollections)
+                || Enabled(OrganizationPermission.RequestCollectionReversals)
+                || Enabled(OrganizationPermission.ReviewCollectionReversals)
+                || Enabled(OrganizationPermission.ReviewBills))
+            && !Enabled(OrganizationPermission.ViewApprovedBills))
+        {
+            return "Collection and bill review actions require permission to view approved bills.";
+        }
+
+        return null;
     }
 
     private static async Task<IResult> LogoutAsync(HttpContext httpContext)
@@ -235,6 +376,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewAssignedProperties, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var include = includeArchived == true && actor.IsAdmin;
@@ -259,6 +405,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewAssignedProperties, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var include = includeArchived == true && actor.IsAdmin;
@@ -297,13 +448,18 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var error = ValidatePropertyDraft(request);
         if (error is not null)
         {
             return BadRequest(error);
         }
 
-        var property = new Property(actor.OrganizationId, request.Name, request.Address, request.PropertyType);
+        var property = new Property(actor.OrganizationId, request.Name, request.Address, request.PropertyType, request.TimeZoneId);
         db.Properties.Add(property);
         for (var index = 0; index < request.Floors.Count; index++)
         {
@@ -333,6 +489,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var property = await AccessibleProperties(db, actor, includeArchived: true).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
         if (property is null)
         {
@@ -341,7 +502,7 @@ public static class PrimeTectEndpointMapping
 
         try
         {
-            property.Update(request.Name, request.Address, request.PropertyType);
+            property.Update(request.Name, request.Address, request.PropertyType, request.TimeZoneId);
             property.SetArchived(request.IsArchived);
         }
         catch (ArgumentException exception)
@@ -364,6 +525,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var property = await AccessibleProperties(db, actor, includeArchived: false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
@@ -398,6 +564,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var property = await AccessibleProperties(db, actor, includeArchived: true).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
@@ -451,6 +622,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var property = await AccessibleProperties(db, actor, includeArchived: true).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
         var unit = await db.Units.FirstOrDefaultAsync(item => item.Id == unitId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
         if (property is null || unit is null)
@@ -483,6 +659,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageTenants, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var unit = await AccessibleUnitAsync(db, actor, propertyId, unitId, cancellationToken);
@@ -590,6 +771,13 @@ public static class PrimeTectEndpointMapping
         if (!assignmentExists)
         {
             db.StaffPropertyAssignments.Add(new StaffPropertyAssignment(actor.OrganizationId, userId, propertyId));
+            db.OrganizationAuditEntries.Add(new OrganizationAuditEntry(
+                actor.OrganizationId,
+                actor.UserId,
+                "StaffPropertyAssigned",
+                "Property assignment changed.",
+                null,
+                JsonSerializer.Serialize(new { userId, propertyId })));
             await db.SaveChangesAsync(cancellationToken);
         }
 
@@ -615,7 +803,15 @@ public static class PrimeTectEndpointMapping
             return Results.NotFound();
         }
 
+        var before = JsonSerializer.Serialize(new { assignment.UserId, assignment.PropertyId });
         db.StaffPropertyAssignments.Remove(assignment);
+        db.OrganizationAuditEntries.Add(new OrganizationAuditEntry(
+            actor.OrganizationId,
+            actor.UserId,
+            "StaffPropertyUnassigned",
+            "Property assignment changed.",
+            before,
+            null));
         await db.SaveChangesAsync(cancellationToken);
         return Results.NoContent();
     }
@@ -629,6 +825,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewAssignedProperties, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var query = db.Tenants.AsNoTracking().Where(tenant => tenant.OrganizationId == actor.OrganizationId);
@@ -653,6 +854,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageTenants, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var tenant = new Tenant(actor.OrganizationId, request.Name, request.Phone);
         db.Tenants.Add(tenant);
         await db.SaveChangesAsync(cancellationToken);
@@ -670,6 +876,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageTenants, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var tenant = await AccessibleTenants(db, actor).FirstOrDefaultAsync(item => item.Id == tenantId, cancellationToken);
@@ -694,6 +905,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewAssignedProperties, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var unit = await AccessibleUnitAsync(db, actor, propertyId, unitId, cancellationToken);
@@ -730,6 +946,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageTenants, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         if (request.EndDate is not null && request.EndDate < request.StartDate)
@@ -775,6 +996,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageTenants, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         if (await AccessibleUnitAsync(db, actor, propertyId, unitId, cancellationToken) is null)
         {
             return Results.NotFound();
@@ -813,6 +1039,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageCharges, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var property = await AccessibleProperties(db, actor, false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
         if (property is null)
         {
@@ -838,6 +1069,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageCharges, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var property = await AccessibleProperties(db, actor, false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
@@ -884,6 +1120,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageCharges, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var unit = await AccessibleUnitAsync(db, actor, propertyId, unitId, cancellationToken);
         if (unit is null)
         {
@@ -910,6 +1151,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageCharges, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var unit = await AccessibleUnitAsync(db, actor, propertyId, unitId, cancellationToken);
@@ -981,6 +1227,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageCharges, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         if (!Enum.TryParse<ChargeType>(chargeType, true, out var parsedChargeType))
         {
             return BadRequest("The charge type is not recognized.");
@@ -1049,7 +1300,8 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.IsManagerOrAdmin)
+        if ((actor.Role == UserRole.BuildingStaff && !actor.IsAdmin)
+            || !await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.EditMeterReadings, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -1203,6 +1455,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewMeterReadings, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
         {
             return BadRequest("Billing month must use the yyyy-MM format.");
@@ -1231,6 +1488,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewApprovedBills, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
@@ -1280,6 +1542,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewApprovedBills, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
         {
             return BadRequest("Billing month must use the yyyy-MM format.");
@@ -1325,6 +1592,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewApprovedBills, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
@@ -1388,6 +1660,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewApprovedBills, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
@@ -1461,7 +1738,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanSubmitReadings)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.EditMeterReadings, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -1570,7 +1847,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanSubmitReadings)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.SubmitMeterReadings, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -1630,6 +1907,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewBills, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
         if (cycle is null)
         {
@@ -1681,6 +1963,11 @@ public static class PrimeTectEndpointMapping
         if (actor is null)
         {
             return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewBills, cancellationToken))
+        {
+            return Results.Forbid();
         }
 
         var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
@@ -1748,6 +2035,11 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewApprovedBills, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
         var property = await AccessibleProperties(db, actor, includeArchived: false)
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
@@ -1798,7 +2090,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanSubmitCollections)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReportCollections, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -1905,7 +2197,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanSubmitCollections && !actor.IsAdmin)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReportCollections, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -1976,7 +2268,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanReviewCollections)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewCollections, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -2033,7 +2325,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanReviewCollections)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewCollections, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -2128,7 +2420,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanSubmitCollections && !actor.IsAdmin)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.RequestCollectionReversals, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -2201,7 +2493,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanSubmitCollections && !actor.IsAdmin)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.RequestCollectionReversals, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -2269,7 +2561,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanReviewCollections)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewCollectionReversals, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -2327,7 +2619,7 @@ public static class PrimeTectEndpointMapping
             return Results.Unauthorized();
         }
 
-        if (!actor.CanReviewCollections)
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewCollectionReversals, cancellationToken))
         {
             return Results.Forbid();
         }
@@ -2991,7 +3283,7 @@ public static class PrimeTectEndpointMapping
             floor.SortOrder,
             floor.IsArchived,
             units.Where(unit => unit.FloorId == floor.Id).Select(unit => new UnitResponse(unit.Id, unit.Name, unit.IsEnabled, unit.IsArchived, unit.OccupancyStatus)).ToList())).ToList();
-        return new PropertyResponse(property.Id, property.Name, property.Address, property.PropertyType, property.IsArchived, floorResponses);
+        return new PropertyResponse(property.Id, property.Name, property.Address, property.PropertyType, property.IsArchived, floorResponses, property.TimeZoneId);
     }
 
     private static AppUser NewUser(Guid organizationId, string email, string fullName, UserRole role) => new()

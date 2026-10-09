@@ -8,6 +8,23 @@ public enum UserRole
     FinanceManager = 4,
 }
 
+public enum OrganizationPermission
+{
+    ViewAssignedProperties = 1,
+    ViewMeterReadings = 2,
+    EditMeterReadings = 3,
+    SubmitMeterReadings = 4,
+    ViewApprovedBills = 5,
+    ReportCollections = 6,
+    ReviewCollections = 7,
+    RequestCollectionReversals = 8,
+    ReviewCollectionReversals = 9,
+    ManageTenants = 10,
+    ManageProperties = 11,
+    ManageCharges = 12,
+    ReviewBills = 13,
+}
+
 public enum PropertyType
 {
     ApartmentBuilding = 1,

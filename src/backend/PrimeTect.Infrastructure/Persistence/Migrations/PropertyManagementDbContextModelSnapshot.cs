@@ -758,6 +758,69 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.ToTable("organizations", (string)null);
                 });
 
+            modelBuilder.Entity("PrimeTect.Domain.Entities.OrganizationAuditEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AfterJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BeforeJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "OccurredAtUtc");
+
+                    b.ToTable("organization_audit_entries", (string)null);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.OrganizationRolePermission", b =>
+                {
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Role")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Permission")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("OrganizationId", "Role", "Permission");
+
+                    b.HasIndex("OrganizationId", "Role");
+
+                    b.ToTable("organization_role_permissions", (string)null);
+                });
+
             modelBuilder.Entity("PrimeTect.Domain.Entities.Property", b =>
                 {
                     b.Property<Guid>("Id")
@@ -787,6 +850,11 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
+
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.HasKey("Id");
 
@@ -1188,6 +1256,24 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasOne("PrimeTect.Domain.Entities.Unit", null)
                         .WithMany()
                         .HasForeignKey("UnitId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.OrganizationAuditEntry", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.OrganizationRolePermission", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -10,9 +10,9 @@ public sealed record InvitationRequest(string Email, UserRole Role);
 
 public sealed record AcceptInvitationRequest(string Token, string FullName, string Password);
 
-public sealed record PropertySetupRequest(string Name, string Address, PropertyType PropertyType, IReadOnlyList<FloorDraft> Floors);
+public sealed record PropertySetupRequest(string Name, string Address, PropertyType PropertyType, IReadOnlyList<FloorDraft> Floors, string? TimeZoneId = null);
 
-public sealed record PropertyUpdateRequest(string Name, string Address, PropertyType PropertyType, bool IsArchived);
+public sealed record PropertyUpdateRequest(string Name, string Address, PropertyType PropertyType, bool IsArchived, string? TimeZoneId = null);
 
 public sealed record FloorDraft(string Name, int UnitCount, IReadOnlyList<string>? UnitNames);
 
@@ -55,6 +55,10 @@ public sealed record EndChargeRequest(DateOnly BillingMonth);
 public sealed record BillingReadingsRequest(long ExpectedVersion, IReadOnlyList<MeterReadingEntryRequest> Entries, string? Reason);
 
 public sealed record BillingActionRequest(long ExpectedVersion, string? Reason);
+
+public sealed record RolePermissionUpdateRequest(UserRole Role, IReadOnlyDictionary<string, bool> Permissions, string? Reason);
+
+public sealed record RolePermissionConfigurationResponse(UserRole Role, IReadOnlyDictionary<string, bool> Permissions);
 
 public sealed record CollectionReportCreateRequest(
     Guid BillingUnitBillId,
@@ -132,7 +136,7 @@ public sealed record UnitResponse(Guid Id, string Name, bool IsEnabled, bool IsA
 
 public sealed record FloorResponse(Guid Id, string Name, int SortOrder, bool IsArchived, IReadOnlyList<UnitResponse> Units);
 
-public sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, IReadOnlyList<FloorResponse> Floors);
+public sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, IReadOnlyList<FloorResponse> Floors, string TimeZoneId);
 
 public sealed record TenantResponse(Guid Id, string? Name, string? Phone, OnboardingStatus OnboardingStatus);
 

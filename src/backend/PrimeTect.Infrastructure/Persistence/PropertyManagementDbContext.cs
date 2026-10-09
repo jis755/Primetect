@@ -41,6 +41,10 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<CollectionAuditEntry> CollectionAuditEntries => Set<CollectionAuditEntry>();
 
+    public DbSet<OrganizationRolePermission> OrganizationRolePermissions => Set<OrganizationRolePermission>();
+
+    public DbSet<OrganizationAuditEntry> OrganizationAuditEntries => Set<OrganizationAuditEntry>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -60,6 +64,29 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(organization => organization.Name).HasMaxLength(200).IsRequired();
         });
 
+        modelBuilder.Entity<OrganizationRolePermission>(entity =>
+        {
+            entity.ToTable("organization_role_permissions");
+            entity.HasKey(permission => new { permission.OrganizationId, permission.Role, permission.Permission });
+            entity.Property(permission => permission.Role).HasConversion<string>().HasMaxLength(40).IsRequired();
+            entity.Property(permission => permission.Permission).HasConversion<string>().HasMaxLength(80).IsRequired();
+            entity.Property(permission => permission.UpdatedAtUtc).IsRequired();
+            entity.HasIndex(permission => new { permission.OrganizationId, permission.Role });
+            entity.HasOne<Organization>().WithMany().HasForeignKey(permission => permission.OrganizationId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OrganizationAuditEntry>(entity =>
+        {
+            entity.ToTable("organization_audit_entries");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.Action).HasMaxLength(80).IsRequired();
+            entity.Property(audit => audit.Reason).HasMaxLength(500);
+            entity.Property(audit => audit.BeforeJson).HasColumnType("text");
+            entity.Property(audit => audit.AfterJson).HasColumnType("text");
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.OccurredAtUtc });
+            entity.HasOne<Organization>().WithMany().HasForeignKey(audit => audit.OrganizationId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<Property>(entity =>
         {
             entity.ToTable("properties");
@@ -67,6 +94,7 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(property => property.Name).HasMaxLength(200).IsRequired();
             entity.Property(property => property.Address).HasMaxLength(500).IsRequired();
             entity.Property(property => property.PropertyType).HasConversion<string>().HasMaxLength(50).IsRequired();
+            entity.Property(property => property.TimeZoneId).HasMaxLength(100).IsRequired();
             entity.HasIndex(property => new { property.OrganizationId, property.Name });
             entity.HasOne<Organization>().WithMany().HasForeignKey(property => property.OrganizationId).OnDelete(DeleteBehavior.Restrict);
         });

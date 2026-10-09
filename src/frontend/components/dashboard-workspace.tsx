@@ -16,13 +16,14 @@ type BillingAuditAction = "Generated" | "Saved" | "Submitted" | "Returned" | "Ap
 type CollectionReportStatus = "Pending" | "Returned" | "Approved";
 type CollectionReversalStatus = "Pending" | "Returned" | "Approved";
 type PaymentMethod = "Cash" | "BankTransfer" | "MobilePayment" | "Other";
+type PermissionKey = "ViewAssignedProperties" | "ViewMeterReadings" | "EditMeterReadings" | "SubmitMeterReadings" | "ViewApprovedBills" | "ReportCollections" | "ReviewCollections" | "RequestCollectionReversals" | "ReviewCollectionReversals" | "ManageTenants" | "ManageProperties" | "ManageCharges" | "ReviewBills";
 
 type User = { id: string; email: string; fullName: string; role: UserRole; organizationId: string };
 type Organization = { id: string; name: string };
-type Session = { user: User; organization: Organization };
+type Session = { user: User; organization: Organization; permissions?: Partial<Record<PermissionKey, boolean>> };
 type Unit = { id: string; name: string; isEnabled: boolean; isArchived: boolean; occupancyStatus: OccupancyStatus };
 type Floor = { id: string; name: string; sortOrder: number; isArchived: boolean; units: Unit[] };
-type Property = { id: string; name: string; address: string; propertyType: PropertyType; isArchived: boolean; floors: Floor[] };
+type Property = { id: string; name: string; address: string; propertyType: PropertyType; isArchived: boolean; floors: Floor[]; timeZoneId?: string };
 type Tenant = { id: string; name: string | null; phone: string | null; onboardingStatus: "NotConnected" };
 type StaffMember = { user: User; propertyIds: string[] };
 type FloorDraft = { name: string; unitCount: number; unitNames: string };
@@ -44,17 +45,22 @@ type BillingComparison = { propertyId: string; propertyName: string; propertyAdd
 type CollectionAudit = { id: string; collectionReversalId: string | null; actorUserId: string; action: string; occurredAtUtc: string; reason: string | null; before: string | null; after: string | null };
 type CollectionReport = { id: string; billingUnitBillId: string; billingCycleId: string; propertyId: string; billingMonth: string; unitId: string; unitName: string; floorName: string | null; occupancyAssignmentId: string | null; tenantId: string | null; tenantName: string | null; tenantPhone: string | null; billedAmount: number; confirmedCollectedAmount: number; remainingBalance: number; amountReceived: number; receivedDate: string; paymentMethod: PaymentMethod; referenceNote: string | null; reporterUserId: string; reporterName: string; submittedAtUtc: string; status: CollectionReportStatus; version: number; returnReason: string | null; approvedByUserId: string | null; approvedAtUtc: string | null; isReversed: boolean; reversalStatus: CollectionReversalStatus | null; reversalId: string | null; reversalVersion: number | null; reversalReason: string | null; audit: CollectionAudit[] };
 type CollectionQueue = { items: CollectionReport[]; billedTotal: number; pendingReportedTotal: number; confirmedCollectedTotal: number; outstandingTotal: number };
+type RolePermissionConfiguration = { role: Exclude<UserRole, "Admin">; permissions: Record<PermissionKey, boolean> };
 
 const propertyTypeLabels: Record<PropertyType, string> = { ApartmentBuilding: "Apartment building", IndividualRoomBuilding: "Individual-room building", Shop: "Shops" };
 const roleLabels: Record<UserRole, string> = { Admin: "Admin", Manager: "Building manager", BuildingStaff: "Building staff", FinanceManager: "Finance manager" };
 const chargeTypeLabels: Record<ChargeType, string> = { Electricity: "Electricity", Water: "Water", Gas: "Gas", ServiceCharge: "Service charge", Rent: "Rent", Custom: "Custom" };
 const chargeTypes: ChargeType[] = ["Electricity", "Water", "Gas", "ServiceCharge", "Rent", "Custom"];
+const permissionKeys: PermissionKey[] = ["ViewAssignedProperties", "ViewMeterReadings", "EditMeterReadings", "SubmitMeterReadings", "ViewApprovedBills", "ReportCollections", "ReviewCollections", "RequestCollectionReversals", "ReviewCollectionReversals", "ManageTenants", "ManageProperties", "ManageCharges", "ReviewBills"];
+const permissionLabels: Record<PermissionKey, string> = { ViewAssignedProperties: "View assigned properties and units", ViewMeterReadings: "View meter readings", EditMeterReadings: "Enter or correct draft readings", SubmitMeterReadings: "Submit readings for review", ViewApprovedBills: "View approved bills and reports", ReportCollections: "Report collections", ReviewCollections: "Review or approve collections", RequestCollectionReversals: "Request collection reversals", ReviewCollectionReversals: "Review or approve reversals", ManageTenants: "Manage tenants and occupancies", ManageProperties: "Manage properties", ManageCharges: "Manage charges, rates, and warnings", ReviewBills: "Review or approve bills" };
 const initialFloors: FloorDraft[] = [
   { name: "Floor 1", unitCount: 2, unitNames: "1A, 1B" },
   { name: "Floor 2", unitCount: 2, unitNames: "2A, 2B" },
   { name: "Floor 3", unitCount: 2, unitNames: "3A, 3B" },
   { name: "Floor 4", unitCount: 1, unitNames: "4A" },
 ];
+
+function hasPermission(session: Session, permission: PermissionKey) { return session.user.role === "Admin" || session.permissions?.[permission] === true; }
 
 export function DashboardWorkspace() {
   const [session, setSession] = useState<Session | null>(null);
@@ -90,6 +96,39 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [busy, setBusy] = useState(false);
   const [selectedPropertyId, setSelectedPropertyId] = useState("all");
+  const [activeView, setActiveView] = useState<"properties" | "meter-readings" | "collections" | "roles">("properties");
+  const isAdmin = session.user.role === "Admin";
+  const canProperties = isAdmin || hasPermission(session, "ViewAssignedProperties");
+  const canMeter = isAdmin || hasPermission(session, "ViewMeterReadings");
+  const canCollections = isAdmin || hasPermission(session, "ViewApprovedBills") || hasPermission(session, "ReportCollections");
+  const visibleProperties = selectedPropertyId === "all" ? properties : properties.filter((property) => property.id === selectedPropertyId);
+
+  async function refresh() {
+    setBusy(true);
+    try {
+      if (canProperties) setProperties(await apiFetch<Property[]>(isAdmin ? "/api/properties?includeArchived=true" : "/api/properties"));
+      if (isAdmin) { setTenants(await apiFetch<Tenant[]>("/api/tenants")); setStaff(await apiFetch<StaffMember[]>("/api/staff")); }
+    } catch (caught) { onError(getErrorMessage(caught, "We could not refresh your workspace.")); }
+    finally { setBusy(false); }
+  }
+
+  useEffect(() => { void refresh(); }, [session.user.id, canProperties]);
+  useEffect(() => {
+    if ((activeView === "meter-readings" && !canMeter) || (activeView === "collections" && !canCollections)) setActiveView("properties");
+  }, [activeView, canCollections, canMeter]);
+
+  async function updateOccupancyStatus(propertyId: string, unitId: string, status: OccupancyStatus) { try { await apiFetch(`/api/properties/${propertyId}/units/${unitId}/occupancy-status`, { method: "PUT", body: JSON.stringify({ status }) }); onMessage("Occupancy status saved separately from tenant details."); await refresh(); return true; } catch (caught) { onError(getErrorMessage(caught, "Could not save occupancy status.")); return false; } }
+  async function updateUnit(propertyId: string, unit: Unit, changes: { name?: string; isEnabled?: boolean; isArchived?: boolean }) { try { await apiFetch(`/api/properties/${propertyId}/units/${unit.id}`, { method: "PUT", body: JSON.stringify({ name: changes.name ?? unit.name, isEnabled: changes.isEnabled ?? unit.isEnabled, isArchived: changes.isArchived ?? unit.isArchived }) }); onMessage("Unit settings saved."); await refresh(); } catch (caught) { onError(getErrorMessage(caught, "Could not save unit settings.")); } }
+
+  return <main className="min-h-screen bg-sand"><header className="border-b border-ink/10 bg-white/70 px-6 py-5 sm:px-10 lg:px-14"><div className="mx-auto flex max-w-7xl items-center justify-between gap-6"><BrandMark /><div className="flex items-center gap-3"><ApiHealth /><div className="hidden text-right sm:block"><p className="text-sm font-bold text-ink">{session.user.fullName}</p><p className="text-xs text-ink/50">{roleLabels[session.user.role]} · {session.organization.name}</p></div><button onClick={onLogout} className="min-h-11 rounded-full border border-ink/15 px-4 py-2 text-xs font-bold text-ink transition hover:bg-white">Log out</button></div></div></header><nav aria-label="Primary" className="no-print mx-auto flex max-w-7xl flex-wrap gap-2 px-6 pt-5 sm:px-10 lg:px-14"><button type="button" onClick={() => setActiveView("properties")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "properties" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>Properties</button>{canMeter && <button type="button" onClick={() => setActiveView("meter-readings")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "meter-readings" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>Meter Readings / মিটার রিডিং</button>}{canCollections && <button type="button" onClick={() => setActiveView("collections")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "collections" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>Collections / টাকা পাওয়া</button>}{isAdmin && <button type="button" onClick={() => setActiveView("roles")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "roles" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>Roles & permissions</button>}</nav><section className="mx-auto max-w-7xl px-6 py-10 sm:px-10 lg:px-14"><div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-pine">PrimeTect workspace</p><h1 className="mt-3 text-4xl font-black tracking-[-0.07em] text-ink sm:text-5xl">{isAdmin ? "Organization operations" : session.user.role === "FinanceManager" ? "Collection review" : "Your assigned work"}</h1><p className="mt-3 max-w-2xl text-base leading-7 text-ink/55">{session.user.role === "FinanceManager" ? "Review reported receipts and reversals in assigned properties." : "Use the short task screens to finish monthly work."}</p></div><div className="flex flex-wrap items-end gap-3"><label className="text-xs font-bold text-ink">Property<select value={selectedPropertyId} onChange={(event) => setSelectedPropertyId(event.target.value)} className="mt-1 block min-w-48 rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-xs font-normal"><option value="all">All assigned properties</option>{properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}</select></label><span className="rounded-full bg-mint px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-pine">{busy ? "Refreshing" : "Ready"}</span></div></div>{message && <Notice tone="success" message={message} onClose={() => onMessage("")} />}{error && <Notice tone="error" message={error} onClose={() => onError("")} />}{activeView === "roles" && isAdmin && <RolePermissionWorkspace onError={onError} onMessage={onMessage} />}{activeView === "properties" && <>{!isAdmin && <RoleActionCards role={session.user.role} permissions={session.permissions} onMeter={() => setActiveView("meter-readings")} onCollections={() => setActiveView("collections")} />}{canProperties && <div className="mt-10 space-y-5">{visibleProperties.length === 0 ? <EmptyState role={session.user.role} /> : visibleProperties.map((property) => <PropertyCard key={property.id} property={property} tenants={[]} role={session.user.role} canEdit={isAdmin || hasPermission(session, "ManageProperties")} onRefresh={refresh} onError={onError} onMessage={onMessage} onOccupancyStatus={async () => false} onUnitUpdate={async () => undefined} />)}</div>}</>}{activeView === "meter-readings" && canMeter && <MeterReadingsWorkspace properties={properties} role={session.user.role} permissions={session.permissions} onError={onError} onMessage={onMessage} />}{activeView === "collections" && canCollections && (hasPermission(session, "ReviewCollections") || isAdmin) && <CollectionReviewWorkspace properties={properties} selectedPropertyId={selectedPropertyId} role={isAdmin ? "Admin" : "FinanceManager"} onError={onError} onMessage={onMessage} />}{activeView === "collections" && canCollections && hasPermission(session, "ReportCollections") && <CollectionReportingWorkspace properties={properties} selectedPropertyId={selectedPropertyId} onError={onError} onMessage={onMessage} />}</section></main>;
+}
+
+function LegacyWorkspace({ session, message, error, onMessage, onError, onLogout }: { session: Session; message: string; error: string; onMessage: (message: string) => void; onError: (message: string) => void; onLogout: () => Promise<void> }) {
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [selectedPropertyId, setSelectedPropertyId] = useState("all");
   const [activeView, setActiveView] = useState<"properties" | "meter-readings" | "collections">("properties");
   async function refresh() {
     setBusy(true);
@@ -104,15 +143,44 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
   return <main className="min-h-screen bg-sand"><header className="border-b border-ink/10 bg-white/70 px-6 py-5 sm:px-10 lg:px-14"><div className="mx-auto flex max-w-7xl items-center justify-between gap-6"><BrandMark /><div className="flex items-center gap-3"><ApiHealth /><div className="hidden text-right sm:block"><p className="text-sm font-bold text-ink">{session.user.fullName}</p><p className="text-xs text-ink/50">{roleLabels[session.user.role]} · {session.organization.name}</p></div><button onClick={onLogout} className="rounded-full border border-ink/15 px-4 py-2 text-xs font-bold text-ink transition hover:bg-white">Log out</button></div></div></header><nav className="no-print mx-auto flex max-w-7xl flex-wrap gap-2 px-6 pt-5 sm:px-10 lg:px-14"><button type="button" onClick={() => setActiveView("properties")} className={`rounded-xl px-3 py-2 text-xs font-bold ${activeView === "properties" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>Properties</button><button type="button" onClick={() => setActiveView("meter-readings")} className={`rounded-xl px-3 py-2 text-xs font-bold ${activeView === "meter-readings" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>Meter Readings</button><button type="button" onClick={() => setActiveView("collections")} className={`rounded-xl px-3 py-2 text-xs font-bold ${activeView === "collections" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>Collections</button></nav><section className="mx-auto max-w-7xl px-6 py-10 sm:px-10 lg:px-14"><div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-pine">Live workspace</p><h1 className="mt-3 text-4xl font-black tracking-[-0.07em] text-ink sm:text-5xl">{isAdmin ? "Organization operations" : session.user.role === "FinanceManager" ? "Collection review" : "Your assigned operations"}</h1><p className="mt-3 max-w-2xl text-base leading-7 text-ink/55">Real records only. PrimeTect does not infer vacancy from missing tenant information.</p></div><div className="flex flex-wrap items-end gap-3"><label className="text-xs font-bold text-ink">Property<select value={selectedPropertyId} onChange={(event) => setSelectedPropertyId(event.target.value)} className="mt-1 block min-w-48 rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-xs font-normal"><option value="all">All assigned properties</option>{properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}</select></label><span className="rounded-full bg-mint px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-pine">{busy ? "Refreshing" : "Ready"}</span></div></div>{message && <Notice tone="success" message={message} onClose={() => onMessage("")} />}{error && <Notice tone="error" message={error} onClose={() => onError("")} />}{!isAdmin && activeView === "properties" && <RoleActionCards role={session.user.role} onMeter={() => setActiveView("meter-readings")} onCollections={() => setActiveView("collections")} />}{activeView === "meter-readings" && session.user.role !== "FinanceManager" && <MeterReadingsWorkspace properties={properties} role={session.user.role} onError={onError} onMessage={onMessage} />}{activeView === "collections" && (session.user.role === "Admin" || session.user.role === "FinanceManager") && <CollectionReviewWorkspace properties={properties} selectedPropertyId={selectedPropertyId} role={session.user.role} onError={onError} onMessage={onMessage} />}{activeView === "collections" && (session.user.role === "Manager" || session.user.role === "BuildingStaff") && <CollectionReportingWorkspace properties={properties} selectedPropertyId={selectedPropertyId} onError={onError} onMessage={onMessage} />}{activeView === "properties" && <div className="mt-10 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,0.42fr)]"><div className="min-w-0 space-y-5">{visibleProperties.length === 0 ? <EmptyState role={session.user.role} /> : visibleProperties.map((property) => <PropertyCard key={property.id} property={property} tenants={tenants} role={session.user.role} canEdit={isAdmin} onRefresh={refresh} onError={onError} onMessage={onMessage} onOccupancyStatus={updateOccupancyStatus} onUnitUpdate={updateUnit} />)}{isAdmin && selectedPropertyId === "all" && <PropertySetup onSaved={refresh} onError={onError} onMessage={onMessage} />}</div><aside className="min-w-0 space-y-5">{isAdmin && <><TenantPanel tenants={tenants} onSaved={refresh} onError={onError} /><StaffPanel staff={staff} properties={properties} onSaved={refresh} onError={onError} onMessage={onMessage} /></>}{session.user.role === "Manager" && <InfoCard title="Building manager access"><p>You may enter readings and report manual receipts only for properties assigned to your account. Bill approval and administration remain with Admins.</p></InfoCard>}{session.user.role === "BuildingStaff" && <InfoCard title="Building staff access"><p>This view is filtered to assigned properties. You may enter readings and report receipts; approvals and administration remain restricted.</p></InfoCard>}{session.user.role === "FinanceManager" && <InfoCard title="Finance manager access"><p>Review and approve manual collection reports for assigned properties. Reading, charge, tenant, and property administration remain restricted.</p></InfoCard>}</aside></div>}</section></main>;
 }
 
-function RoleActionCards({ role, onMeter, onCollections }: { role: UserRole; onMeter: () => void; onCollections: () => void }) {
-  if (role === "FinanceManager") return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">Finance manager</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">Review confirmed receipts</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">Review manual collection reports in assigned properties. Approval confirms reported money only; it does not approve the bill or verify a bank/provider payment.</p><button type="button" onClick={onCollections} className="mt-5 min-h-11 rounded-xl bg-pine px-4 py-3 text-sm font-bold text-white">Review collections</button></section>;
-  return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{role === "Manager" ? "Building manager" : "Building staff"} actions</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">Keep monthly work moving</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">Use the assigned property workflows below. You can save and submit readings and report manually received money; Admins and Finance Managers handle approvals.</p><div className="mt-5 grid gap-3 sm:grid-cols-2"><button type="button" onClick={onMeter} className="min-h-14 rounded-xl bg-pine px-4 py-3 text-left text-sm font-bold text-white"><span className="block text-base">Enter meter readings</span><span className="mt-1 block text-xs font-normal text-white/75">Save drafts and submit the monthly reading review</span></button><button type="button" onClick={onCollections} className="min-h-14 rounded-xl border border-pine/25 bg-white px-4 py-3 text-left text-sm font-bold text-pine"><span className="block text-base">Report money received</span><span className="mt-1 block text-xs font-normal text-ink/55">Link a full or partial manual receipt to one approved bill</span></button></div></section>;
+function RoleActionCards({ role, permissions, onMeter, onCollections }: { role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onMeter: () => void; onCollections: () => void }) {
+  const canMeter = permissions?.ViewMeterReadings !== false;
+  const canCollections = permissions?.ReportCollections !== false;
+  if (role === "FinanceManager") return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">Finance manager</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">Review confirmed receipts</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">Review manual collection reports in assigned properties. Approval confirms reported money only; it does not approve the bill or verify a bank/provider payment.</p>{permissions?.ReviewCollections !== false && <button type="button" onClick={onCollections} className="mt-5 min-h-11 rounded-xl bg-pine px-4 py-3 text-sm font-bold text-white">Review collections</button>}</section>;
+  if (!canMeter && !canCollections) return null;
+  return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{role === "Manager" ? "Building manager" : "Building staff"} actions</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">Your next tasks</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">Choose a task. Saved readings are drafts until separately submitted for review.</p><div className="mt-5 grid gap-3 sm:grid-cols-2">{canMeter && <button type="button" onClick={onMeter} className="min-h-14 rounded-xl bg-pine px-4 py-3 text-left text-sm font-bold text-white"><span className="block text-base">Enter meter reading / মিটার রিডিং দিন</span><span className="mt-1 block text-xs font-normal text-white/75">Save a room and continue to the next one</span></button>}{canCollections && <button type="button" onClick={onCollections} className="min-h-14 rounded-xl border border-pine/25 bg-white px-4 py-3 text-left text-sm font-bold text-pine"><span className="block text-base">Report money received / টাকা পাওয়া লিখুন</span><span className="mt-1 block text-xs font-normal text-ink/55">Send a full or partial receipt for approval</span></button>}</div></section>;
+}
+
+function RolePermissionWorkspace({ onError, onMessage }: { onError: (message: string) => void; onMessage: (message: string) => void }) {
+  const [configs, setConfigs] = useState<RolePermissionConfiguration[]>([]);
+  const [role, setRole] = useState<RolePermissionConfiguration["role"]>("Manager");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const current = configs.find((item) => item.role === role);
+
+  async function load() {
+    try { setConfigs(await apiFetch<RolePermissionConfiguration[]>("/api/role-permissions")); }
+    catch (caught) { onError(getErrorMessage(caught, "Could not load role permissions.")); }
+  }
+  useEffect(() => { void load(); }, []);
+  function setPermission(permission: PermissionKey, value: boolean) {
+    if (!current) return;
+    setConfigs(configs.map((item) => item.role === role ? { ...item, permissions: { ...item.permissions, [permission]: value } } : item));
+  }
+  async function save() {
+    if (!current) return;
+    setBusy(true);
+    try { await apiFetch("/api/role-permissions", { method: "PUT", body: JSON.stringify({ role, permissions: current.permissions, reason: reason || null }) }); onMessage("Role permissions saved for every member with this role."); setReason(""); await load(); }
+    catch (caught) { onError(getErrorMessage(caught, "Permissions were not saved. Check the dependency explanation and try again.")); }
+    finally { setBusy(false); }
+  }
+  return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-8"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-pine">Admin settings</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">Roles & permissions</h2><p className="mt-2 max-w-3xl text-sm leading-6 text-ink/60">These organization-wide settings affect every member with the selected role. Property assignment is still required; a permission never grants access to an unassigned property. Admin access remains protected.</p></div><label className="mt-5 block max-w-sm text-xs font-bold text-ink">Role<select value={role} onChange={(event) => setRole(event.target.value as RolePermissionConfiguration["role"])} className="mt-1 block min-h-11 w-full rounded-xl border border-ink/10 bg-white px-3 text-sm font-normal"><option value="Manager">Building Manager</option><option value="BuildingStaff">Building Staff</option><option value="FinanceManager">Finance Manager</option></select></label>{current && <><div className="mt-5 grid gap-2 sm:grid-cols-2">{permissionKeys.map((permission) => <label key={permission} className="flex min-h-12 items-start gap-3 rounded-xl border border-ink/10 bg-white p-3 text-sm text-ink"><input type="checkbox" checked={current.permissions[permission] === true} onChange={(event) => setPermission(permission, event.target.checked)} className="mt-1 h-5 w-5 accent-pine" /><span>{permissionLabels[permission]}</span></label>)}</div><p className="mt-4 rounded-xl bg-sand/70 p-3 text-xs leading-5 text-ink/60">Dependencies are checked when you save: entering requires viewing readings; submitting requires entering; reporting or reviewing collections/reversals requires viewing approved bills. A failed save changes nothing.</p><div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-64 flex-1 text-xs font-bold text-ink">Reason (optional)<input value={reason} onChange={(event) => setReason(event.target.value)} className="mt-1 block min-h-11 w-full rounded-xl border border-ink/10 bg-white px-3 text-sm font-normal" placeholder="Why this organization setting changed" /></label><button type="button" disabled={busy} onClick={() => void save()} className="min-h-11 rounded-xl bg-pine px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? "Saving…" : "Save permissions"}</button></div></>}</section>;
 }
 
 function CollectionReportingWorkspace({ properties, selectedPropertyId, onError, onMessage }: { properties: Property[]; selectedPropertyId: string; onError: (message: string) => void; onMessage: (message: string) => void }) {
   const availableProperties = properties.filter((property) => !property.isArchived);
   const [propertyId, setPropertyId] = useState(selectedPropertyId !== "all" ? selectedPropertyId : availableProperties[0]?.id ?? "");
-  const [month, setMonth] = useState(currentMonthInput());
+const [month, setMonth] = useState(currentMonthInput());
   const [cycle, setCycle] = useState<BillingCycle | null>(null);
   const [queue, setQueue] = useState<CollectionQueue | null>(null);
   const [selectedBillId, setSelectedBillId] = useState("");
@@ -152,7 +220,8 @@ function CollectionReportingWorkspace({ properties, selectedPropertyId, onError,
   function clearForm() { setEditingId(null); setForm({ amount: "", receivedDate: currentDateInput(), paymentMethod: "Cash", referenceNote: "" }); }
   async function saveReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!property || !selectedBill) { setLocalError("Select an approved unit bill first."); return; }
-    const amount = Number(form.amount); if (!Number.isFinite(amount) || amount <= 0) { setLocalError("Amount received must be greater than zero."); return; }
+    const amount = Number(normalizeNumericInput(form.amount)); if (!Number.isFinite(amount) || amount <= 0) { setLocalError("Amount received must be greater than zero. Use a dot for decimals."); return; }
+    if (!window.confirm(`You received Tk${money(amount)} for ${selectedBill.unitName}? This reports one ${month} bill by ${form.paymentMethod} and remains pending until independent approval.`)) return;
     setBusy(true); setLocalError("");
     try {
       if (editingId) {
@@ -207,10 +276,11 @@ function CollectionReviewWorkspace({ properties, selectedPropertyId, role, onErr
 function StatusBadge({ status }: { status: string }) { return <span className={`inline-flex min-h-8 items-center rounded-full px-3 py-1 text-xs font-bold ${status === "Approved" ? "bg-mint text-pine" : status === "Returned" ? "bg-sun/30 text-ink" : "bg-ink/10 text-ink/70"}`}>{status === "Pending" ? "Awaiting approval" : status === "Returned" ? "Returned for correction" : status === "Approved" ? "Approved / confirmed" : status}</span>; }
 function paymentMethodLabel(method: PaymentMethod) { return method === "BankTransfer" ? "bank transfer" : method === "MobilePayment" ? "mobile payment" : method.toLowerCase(); }
 
-function MeterReadingsWorkspace({ properties, role, onError, onMessage }: { properties: Property[]; role: UserRole; onError: (message: string) => void; onMessage: (message: string) => void }) {
+function MeterReadingsWorkspace({ properties, role: providedRole, permissions, onError, onMessage }: { properties: Property[]; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void }) {
   const availableProperties = properties.filter((property) => !property.isArchived);
   const [propertyId, setPropertyId] = useState(availableProperties[0]?.id ?? "");
   const [unitSearch, setUnitSearch] = useState("");
+  const role: UserRole = permissions && providedRole !== "Admin" && permissions.ReviewBills ? "Admin" : permissions && providedRole === "FinanceManager" && permissions.EditMeterReadings ? "Manager" : providedRole;
   useEffect(() => {
     if (!availableProperties.some((property) => property.id === propertyId)) setPropertyId(availableProperties[0]?.id ?? "");
   }, [properties, propertyId]);
@@ -223,6 +293,8 @@ function PropertyCard({ property, tenants, role, canEdit, onRefresh, onError, on
   const [editingProperty, setEditingProperty] = useState(false); const [addingFloor, setAddingFloor] = useState(false); const [showCharges, setShowCharges] = useState(false); const [showBilling, setShowBilling] = useState(false);
   const units = property.floors.flatMap((floor) => floor.units);
   const counts = useMemo(() => units.reduce((summary, unit) => ({ ...summary, [unit.occupancyStatus]: summary[unit.occupancyStatus] + 1 }), { Occupied: 0, Vacant: 0, Unknown: 0 } as Record<OccupancyStatus, number>), [units]);
+  onOccupancyStatus = async (propertyId, unitId, status) => { try { await apiFetch(`/api/properties/${propertyId}/units/${unitId}/occupancy-status`, { method: "PUT", body: JSON.stringify({ status }) }); onMessage("Occupancy status saved separately from tenant details."); await onRefresh(); return true; } catch (caught) { onError(getErrorMessage(caught, "Could not save occupancy status.")); return false; } };
+  onUnitUpdate = async (propertyId, unit, changes) => { try { await apiFetch(`/api/properties/${propertyId}/units/${unit.id}`, { method: "PUT", body: JSON.stringify({ name: changes.name ?? unit.name, isEnabled: changes.isEnabled ?? unit.isEnabled, isArchived: changes.isArchived ?? unit.isArchived }) }); onMessage("Unit settings saved."); await onRefresh(); } catch (caught) { onError(getErrorMessage(caught, "Could not save unit settings.")); } };
   return <article className="rounded-[2rem] border border-ink/10 bg-white/75 p-5 shadow-soft sm:p-8"><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="break-words text-2xl font-black tracking-[-0.05em] text-ink">{property.name}</h2>{property.isArchived && <span className="rounded-full bg-ink/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-ink/50">Archived</span>}</div><p className="mt-1 break-words text-sm text-ink/50">{propertyTypeLabels[property.propertyType]} · {property.address}</p></div><div className="text-right"><p className="text-3xl font-black tracking-[-0.07em] text-pine">{units.length}</p><p className="text-xs font-bold uppercase tracking-[0.15em] text-ink/40">units</p></div></div><div className="mt-5 flex flex-wrap gap-2 text-xs font-bold"><span className="rounded-full bg-mint px-3 py-1.5 text-pine">{counts.Occupied} occupied</span><span className="rounded-full bg-sand px-3 py-1.5 text-ink/55">{counts.Vacant} vacant</span><span className="rounded-full bg-ink/5 px-3 py-1.5 text-ink/55">{counts.Unknown} unknown</span></div><div className="mt-5 flex flex-wrap gap-2">{canEdit && <><button type="button" onClick={() => setEditingProperty((value) => !value)} className="rounded-xl border border-pine/20 px-3 py-2 text-xs font-bold text-pine">{editingProperty ? "Close property editor" : "Edit property"}</button><button type="button" onClick={() => setShowCharges((value) => !value)} className="rounded-xl border border-pine/20 px-3 py-2 text-xs font-bold text-pine">{showCharges ? "Hide charge defaults" : "Charge defaults"}</button></>}<button type="button" onClick={() => setShowBilling((value) => !value)} className="rounded-xl bg-pine px-3 py-2 text-xs font-bold text-white">{showBilling ? "Hide monthly billing" : "Monthly billing"}</button></div>{editingProperty && <PropertyEditor property={property} onSaved={async () => { setEditingProperty(false); await onRefresh(); }} onError={onError} />}{showCharges && <ChargeEditor propertyId={property.id} scope="property" onError={onError} onMessage={onMessage} />} {showBilling && <BillingPanel property={property} role={role} onError={onError} onMessage={onMessage} /> }<div className="mt-7 space-y-3">{property.floors.map((floor) => <FloorBlock key={floor.id} property={property} floor={floor} tenants={tenants} canEdit={canEdit} onRefresh={onRefresh} onError={onError} onMessage={onMessage} onOccupancyStatus={onOccupancyStatus} onUnitUpdate={onUnitUpdate} />)}</div>{canEdit && !property.isArchived && <div className="mt-5">{addingFloor ? <AddFloorEditor propertyId={property.id} onSaved={async () => { setAddingFloor(false); await onRefresh(); }} onCancel={() => setAddingFloor(false)} onError={onError} /> : <button type="button" onClick={() => setAddingFloor(true)} className="rounded-xl border border-dashed border-pine/30 px-4 py-2.5 text-sm font-bold text-pine">+ Add floor</button>}</div>}</article>;
 }
 
@@ -420,7 +492,99 @@ function ChargeEditor({ propertyId, unitId, scope, onError, onMessage }: { prope
   </section>;
 }
 
-function BillingPanel({ property, role, onError, onMessage, meterOnly = false, unitSearchQuery, onUnitSearchChange }: { property: Property; role: UserRole; onError: (message: string) => void; onMessage: (message: string) => void; meterOnly?: boolean; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void }) {
+function BillingPanel(props: { property: Property; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; meterOnly?: boolean; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void }) {
+  return props.meterOnly
+    ? <RoomMeterEntry {...props} />
+    : <LegacyBillingPanel {...props} />;
+}
+
+function normalizeNumericInput(value: string) {
+  return value.replace(/[০-৯]/g, (digit) => String("০১২৩৪৫৬৭৮৯".indexOf(digit)));
+}
+
+function RoomMeterEntry({ property, role, permissions, onError, onMessage, unitSearchQuery = "", onUnitSearchChange }: { property: Property; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void }) {
+  const [month, setMonth] = useState(currentMonthInput(property.timeZoneId));
+  const [floorId, setFloorId] = useState("all");
+  const [cycle, setCycle] = useState<BillingCycle | null>(null);
+  const [readings, setReadings] = useState<Record<string, { current: string; date: string }>>({});
+  const [roomIndex, setRoomIndex] = useState(0);
+  const [unfinishedOnly, setUnfinishedOnly] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [returnReason, setReturnReason] = useState("");
+  const [success, setSuccess] = useState("");
+  const canEdit = permissions ? permissions.EditMeterReadings === true : role !== "FinanceManager";
+  const canSubmit = permissions ? permissions.SubmitMeterReadings === true : role !== "FinanceManager";
+  const canReview = role === "Admin" || permissions?.ReviewBills === true;
+  const canGenerate = role === "Admin" || (role !== "BuildingStaff" && canEdit);
+  const floorForUnit = new Map(property.floors.flatMap((floor) => floor.units.map((unit) => [unit.id, floor.id] as const)));
+  const meterBills = cycle?.bills.filter((bill) => bill.charges.some((charge) => charge.isMetered)) ?? [];
+  const filteredBills = meterBills.filter((bill) => {
+    const matchesFloor = floorId === "all" || floorForUnit.get(bill.unitId) === floorId;
+    const matchesSearch = !unitSearchQuery.trim() || bill.unitName.toLowerCase().includes(unitSearchQuery.trim().toLowerCase());
+    const matchesProgress = !unfinishedOnly || bill.charges.some((charge) => charge.isMetered && charge.currentReading === null);
+    return matchesFloor && matchesSearch && matchesProgress;
+  });
+  const currentBill = filteredBills[roomIndex] ?? filteredBills[0];
+  const currentElectricity = currentBill?.charges.find((charge) => charge.isMetered);
+  const completedCount = meterBills.filter((bill) => bill.charges.some((charge) => charge.isMetered && charge.currentReading !== null)).length;
+
+  async function load() {
+    setLoading(true); setLocalError("");
+    try {
+      const next = await apiFetch<BillingCycle>(`/api/properties/${property.id}/billing-cycles/${month}`);
+      setCycle(next);
+      setReadings(Object.fromEntries(next.bills.map((bill) => { const electricity = bill.charges.find((charge) => charge.isMetered); return [bill.id, { current: electricity?.currentReading === null || electricity?.currentReading === undefined ? "" : String(electricity.currentReading), date: electricity?.currentReadingDate ?? "" }]; })));
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) { setCycle(null); setReadings({}); }
+      else setLocalError(getErrorMessage(caught, "Could not load this billing month."));
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); setRoomIndex(0); }, [property.id, month]);
+  useEffect(() => { if (roomIndex >= filteredBills.length) setRoomIndex(Math.max(0, filteredBills.length - 1)); }, [filteredBills.length, roomIndex]);
+
+  async function generate() {
+    setBusy(true); setLocalError("");
+    try { const next = await apiFetch<BillingCycle>(`/api/properties/${property.id}/billing-cycles`, { method: "POST", body: JSON.stringify({ billingMonth: `${month}-01` }) }); setCycle(next); onMessage("Monthly draft generated. Save each room separately; submission is a separate action."); }
+    catch (caught) { setLocalError(getErrorMessage(caught, "Could not generate this billing month.")); }
+    finally { setBusy(false); }
+  }
+
+  function updateCurrent(value: string) {
+    const normalized = normalizeNumericInput(value);
+    if (!currentBill) return;
+    setReadings({ ...readings, [currentBill.id]: { current: normalized, date: readings[currentBill.id]?.date || (normalized.trim() ? currentDateInput(property.timeZoneId) : "") } });
+  }
+
+  async function saveAndNext() {
+    if (!cycle || !currentBill || !currentElectricity) return;
+    const current = readings[currentBill.id]?.current ?? "";
+    const parsed = current.trim() ? Number(normalizeNumericInput(current)) : null;
+    if (parsed !== null && !Number.isFinite(parsed)) { setLocalError("Enter a valid number. Use a dot for decimals; commas are not accepted."); return; }
+    if (parsed !== null && currentElectricity.previousReading !== null && parsed < currentElectricity.previousReading) { setLocalError(`This is below the previous reading ${currentElectricity.previousReading}. Negative consumption is not allowed.`); return; }
+    setBusy(true); setLocalError(""); setSuccess("");
+    try {
+      const observedDate = parsed === null ? null : (readings[currentBill.id]?.date || currentDateInput(property.timeZoneId));
+      const next = await apiFetch<BillingCycle>(`/api/properties/${property.id}/billing-cycles/${cycle.id}/meter-readings`, { method: "PUT", body: JSON.stringify({ expectedVersion: cycle.version, entries: [{ unitBillId: currentBill.id, previousReading: currentElectricity.previousReading, currentReading: parsed, previousReadingDate: currentElectricity.previousReadingDate, currentReadingDate: observedDate }], reason: "Room reading saved from the guided meter-entry screen." }) });
+      setCycle(next); setSuccess(`${currentBill.unitName} reading saved.`); onMessage(`${currentBill.unitName} reading saved. / ${currentBill.unitName} রিডিং সেভ হয়েছে।`); setReadings({ ...readings, [currentBill.id]: { current: parsed === null ? "" : String(parsed), date: observedDate ?? "" } }); setRoomIndex((index) => unfinishedOnly ? index : Math.min(index + 1, Math.max(0, filteredBills.length - 1)));
+    } catch (caught) { setLocalError(getErrorMessage(caught, "The reading was not sent. Your input remains here; refresh if another user changed the draft.")); }
+    finally { setBusy(false); }
+  }
+
+  async function transition(action: "submit" | "return" | "approve") {
+    if (!cycle) return;
+    if (action === "return" && !returnReason.trim()) { setLocalError("A reason is required when returning a month for correction."); return; }
+    setBusy(true); setLocalError("");
+    try { const next = await apiFetch<BillingCycle>(`/api/properties/${property.id}/billing-cycles/${cycle.id}/${action}`, { method: "POST", body: JSON.stringify({ expectedVersion: cycle.version, reason: action === "return" ? returnReason : undefined }) }); setCycle(next); setReturnReason(""); onMessage(action === "submit" ? "Readings sent for review." : action === "approve" ? "Billing month approved. Approved is billed, not collected." : "Billing month returned for correction."); }
+    catch (caught) { setLocalError(getErrorMessage(caught, "This month changed or could not be updated. Refresh and try again.")); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="mt-5 rounded-2xl border border-pine/20 bg-mint/35 p-4 sm:p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-pine">One-room meter entry</p><p className="mt-1 text-sm leading-6 text-ink/60">Billing month and reading date are separate. The current month uses the existing PrimeTect billing convention; saved is not submitted.</p></div><div className="flex flex-wrap gap-2"><label className="text-xs font-bold text-ink">Billing month<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="mt-1 block min-h-11 rounded-lg border border-ink/10 bg-white px-2 text-xs font-normal" /></label><label className="text-xs font-bold text-ink">Floor<select value={floorId} onChange={(event) => setFloorId(event.target.value)} className="mt-1 block min-h-11 min-w-28 rounded-lg border border-ink/10 bg-white px-2 text-xs font-normal"><option value="all">All floors</option>{property.floors.map((floor) => <option key={floor.id} value={floor.id}>{floor.name}</option>)}</select></label><label className="text-xs font-bold text-ink">Unit search<input value={unitSearchQuery} onChange={(event) => onUnitSearchChange?.(event.target.value)} className="mt-1 block min-h-11 w-36 rounded-lg border border-ink/10 bg-white px-2 text-xs font-normal" placeholder="B1" /></label></div></div>{localError && <p role="alert" className="mt-3 rounded-lg bg-rose-100 px-3 py-2 text-xs font-semibold text-rose-800">{localError}</p>}{loading ? <p className="mt-4 text-sm text-ink/50">Loading month…</p> : !cycle ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-pine/25 bg-white/60 p-4"><p className="text-sm text-ink/60">No draft exists for {month}.</p>{canGenerate ? <button type="button" disabled={busy} onClick={() => void generate()} className="min-h-11 rounded-xl bg-pine px-4 py-3 text-sm font-bold text-white disabled:opacity-50">Generate draft</button> : <span className="text-sm text-ink/50">You can enter readings after an authorized user generates the draft.</span>}</div> : <><div className="mt-4 grid gap-2 sm:grid-cols-4"><Summary label="Status" value={cycle.status} /><Summary label="Progress" value={`${completedCount} of ${meterBills.length} rooms completed`} /><Summary label="Draft total" value={`Tk ${money(cycle.draftTotal)}`} /><Summary label="Approved total" value={cycle.approvedTotal === null ? "—" : `Tk ${money(cycle.approvedTotal)}`} note="Billed, not collected" /></div><label className="mt-4 flex min-h-11 items-center gap-2 text-sm font-semibold text-ink"><input type="checkbox" checked={unfinishedOnly} onChange={(event) => { setUnfinishedOnly(event.target.checked); setRoomIndex(0); }} className="h-5 w-5 accent-pine" /> Show unfinished rooms only</label>{currentBill && currentElectricity ? <article className="mt-4 rounded-2xl border-2 border-pine/20 bg-white p-5 shadow-sm sm:p-7"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-pine">{property.name} · {property.floors.find((floor) => floor.units.some((unit) => unit.id === currentBill.unitId))?.name ?? "Floor unavailable"}</p><h3 className="mt-2 text-4xl font-black tracking-[-0.07em] text-ink">{currentBill.unitName}</h3><p className="mt-2 text-sm text-ink/60">Room {roomIndex + 1} of {filteredBills.length} · Previous approved reading: {currentElectricity.previousReading === null ? "Opening reading required" : `${currentElectricity.previousReading} (${currentElectricity.previousReadingDate ?? "Reading date unavailable"})`}</p></div><div className="text-right"><p className="text-xs text-ink/50">Rate</p><p className="text-2xl font-black text-pine">Tk {currentElectricity.rate === null ? "—" : money(currentElectricity.rate)} / unit</p><p className="mt-1 text-xs text-ink/50">Used {currentElectricity.consumptionUnits === null ? "—" : currentElectricity.consumptionUnits} · Electricity Tk {money(currentElectricity.amount)}</p></div></div><div className="mt-6 grid gap-4 sm:grid-cols-2"><label className="text-sm font-bold text-ink">Current reading<input inputMode="decimal" value={readings[currentBill.id]?.current ?? ""} onChange={(event) => updateCurrent(event.target.value)} disabled={!canEdit || cycle.status === "Submitted" || cycle.status === "Approved" || busy} className="mt-2 block min-h-14 w-full rounded-xl border border-ink/15 bg-white px-4 text-2xl font-bold" placeholder="Enter reading" /></label><label className="text-sm font-bold text-ink">Observation date<input type="date" value={readings[currentBill.id]?.date ?? ""} onChange={(event) => setReadings({ ...readings, [currentBill.id]: { current: readings[currentBill.id]?.current ?? "", date: event.target.value } })} disabled={!canEdit || cycle.status === "Submitted" || cycle.status === "Approved" || busy} className="mt-2 block min-h-14 w-full rounded-xl border border-ink/15 bg-white px-4 text-base" /><span className="mt-1 block text-xs font-normal text-ink/50">Legacy records show “Reading date unavailable”.</span></label></div><p className="mt-4 text-sm text-ink/65">Consumed units: {currentElectricity.consumptionUnits === null ? "missing until a current reading is entered" : currentElectricity.consumptionUnits} · Electricity amount: Tk {money(currentElectricity.amount)}</p>{currentBill.electricityWarning && <p className="mt-3 rounded-lg bg-rose-100 px-3 py-2 text-sm font-semibold text-rose-900">Warning: electricity bill is below the configured threshold. This does not add a fee and does not independently block approval.</p>}{success && <p role="status" className="mt-3 rounded-lg bg-mint px-3 py-2 text-sm font-semibold text-pine">{success}</p>}<div className="mt-5 flex flex-wrap gap-2">{canEdit && <button type="button" disabled={busy || cycle.status === "Submitted" || cycle.status === "Approved"} onClick={() => void saveAndNext()} className="min-h-12 rounded-xl bg-pine px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? "Saving…" : "Save & Next Room / সেভ করে পরের রুম"}</button>}<button type="button" disabled={roomIndex === 0} onClick={() => setRoomIndex((index) => Math.max(0, index - 1))} className="min-h-12 rounded-xl border border-pine/20 px-4 py-3 text-sm font-bold text-pine disabled:opacity-40">Previous</button><button type="button" disabled={roomIndex >= filteredBills.length - 1} onClick={() => setRoomIndex((index) => Math.min(filteredBills.length - 1, index + 1))} className="min-h-12 rounded-xl border border-pine/20 px-4 py-3 text-sm font-bold text-pine disabled:opacity-40">Next</button></div></article> : <p className="mt-4 rounded-xl border border-dashed border-ink/15 p-5 text-sm text-ink/60">No enabled metered electricity units match this filter.</p>}<div className="mt-4 flex flex-wrap items-end gap-2">{canSubmit && <button type="button" disabled={busy || cycle.blockingBillCount > 0 || cycle.status === "Approved"} onClick={() => void transition("submit")} className="min-h-11 rounded-xl bg-pine px-4 py-3 text-sm font-bold text-white disabled:opacity-50">Submit for review</button>}{canReview && cycle.status === "Submitted" && <><button type="button" disabled={busy} onClick={() => void transition("approve")} className="min-h-11 rounded-xl bg-pine px-4 py-3 text-sm font-bold text-white disabled:opacity-50">Approve month</button><label className="text-xs font-bold text-ink">Return reason<input value={returnReason} onChange={(event) => setReturnReason(event.target.value)} className="mt-1 min-h-11 rounded-lg border border-ink/10 bg-white px-2 text-sm font-normal" placeholder="Required to return" /></label><button type="button" disabled={busy} onClick={() => void transition("return")} className="min-h-11 rounded-xl border border-sun/60 bg-sun/15 px-4 py-3 text-sm font-bold text-ink">Return for correction</button></>}</div></>}</section>;
+}
+
+function LegacyBillingPanel({ property, role, permissions, onError, onMessage, meterOnly = false, unitSearchQuery, onUnitSearchChange }: { property: Property; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; meterOnly?: boolean; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void }) {
   const [month, setMonth] = useState(currentMonthInput());
   const [floorId, setFloorId] = useState("all");
   const [localUnitSearch, setLocalUnitSearch] = useState("");
@@ -622,8 +786,18 @@ function CenteredState({ label }: { label: string }) { return <main className="f
 function splitNames(value: string) { return value.split(",").map((name) => name.trim()).filter(Boolean); }
 function makeKey() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 function todayInput() { return new Date().toISOString().slice(0, 10); }
-function currentMonthInput() { return new Date().toISOString().slice(0, 7); }
-function currentDateInput() { return new Date().toISOString().slice(0, 10); }
+function currentDateParts(timeZoneId = "Asia/Dhaka") {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: timeZoneId, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return { year: values.year, month: values.month, day: values.day };
+  } catch {
+    const now = new Date();
+    return { year: String(now.getFullYear()), month: String(now.getMonth() + 1).padStart(2, "0"), day: String(now.getDate()).padStart(2, "0") };
+  }
+}
+function currentMonthInput(timeZoneId?: string) { const date = currentDateParts(timeZoneId); return `${date.year}-${date.month}`; }
+function currentDateInput(timeZoneId?: string) { const date = currentDateParts(timeZoneId); return `${date.year}-${date.month}-${date.day}`; }
 function formatDate(value: string) { return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(`${value}T00:00:00`)); }
 function money(value: number) { return value.toFixed(2); }
 function toChargeDraft(setting: ChargeConfiguration): ChargeDraft {

@@ -8,13 +8,14 @@ public sealed class Property
     {
     }
 
-    public Property(Guid organizationId, string name, string address, PropertyType propertyType)
+    public Property(Guid organizationId, string name, string address, PropertyType propertyType, string? timeZoneId = null)
     {
         Id = Guid.NewGuid();
         OrganizationId = organizationId;
         Name = string.IsNullOrWhiteSpace(name) ? throw new ArgumentException("Property name is required.", nameof(name)) : name.Trim();
         Address = string.IsNullOrWhiteSpace(address) ? throw new ArgumentException("Property address is required.", nameof(address)) : address.Trim();
         PropertyType = propertyType;
+        TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? "Asia/Dhaka" : timeZoneId.Trim();
         CreatedAtUtc = DateTimeOffset.UtcNow;
     }
 
@@ -28,15 +29,21 @@ public sealed class Property
 
     public PropertyType PropertyType { get; private set; }
 
+    public string TimeZoneId { get; private set; } = "Asia/Dhaka";
+
     public bool IsArchived { get; private set; }
 
     public DateTimeOffset CreatedAtUtc { get; private set; }
 
-    public void Update(string name, string address, PropertyType propertyType)
+    public void Update(string name, string address, PropertyType propertyType, string? timeZoneId = null)
     {
         Name = string.IsNullOrWhiteSpace(name) ? throw new ArgumentException("Property name is required.", nameof(name)) : name.Trim();
         Address = string.IsNullOrWhiteSpace(address) ? throw new ArgumentException("Property address is required.", nameof(address)) : address.Trim();
         PropertyType = propertyType;
+        if (!string.IsNullOrWhiteSpace(timeZoneId))
+        {
+            TimeZoneId = timeZoneId.Trim();
+        }
     }
 
     public void SetArchived(bool isArchived) => IsArchived = isArchived;

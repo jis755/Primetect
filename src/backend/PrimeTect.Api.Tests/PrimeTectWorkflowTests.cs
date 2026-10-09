@@ -255,6 +255,58 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         Assert.Contains(chargeSettings, setting => setting.ChargeType == ChargeType.ServiceCharge && setting.Amount is null && setting.Mode == ChargeSettingMode.Disabled);
     }
 
+    [Fact]
+    public async Task Admin_role_permissions_have_dependencies_and_revoke_on_the_next_request()
+    {
+        using var admin = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.OK, (await admin.PostAsJsonAsync("/api/auth/register-owner", new
+        {
+            organizationName = "Permission Homes",
+            fullName = "Permission Admin",
+            email = "admin-permissions@example.test",
+            password = "StrongPass!123",
+        })).StatusCode);
+
+        var propertyResponse = await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = "Permission Building",
+            address = "Permission Street",
+            propertyType = "ApartmentBuilding",
+            floors = new[] { new { name = "Ground", unitCount = 1, unitNames = new[] { "P1" } } },
+        });
+        var property = await ReadAsync<PropertyResponse>(propertyResponse);
+        var permissionsResponse = await admin.GetAsync("/api/role-permissions");
+        Assert.Equal(HttpStatusCode.OK, permissionsResponse.StatusCode);
+        using var permissionsJson = JsonDocument.Parse(await permissionsResponse.Content.ReadAsStringAsync());
+        var manager = permissionsJson.RootElement.EnumerateArray().Single(item => item.GetProperty("role").GetString() == "Manager");
+        var defaults = manager.GetProperty("permissions").EnumerateObject().ToDictionary(item => item.Name, item => item.Value.GetBoolean());
+        Assert.True(defaults["ViewMeterReadings"]);
+        Assert.True(defaults["SubmitMeterReadings"]);
+
+        defaults["ViewMeterReadings"] = false;
+        var dependencyFailure = await admin.PutAsJsonAsync("/api/role-permissions", new { role = "Manager", permissions = defaults, reason = "Dependency test" });
+        Assert.Equal(HttpStatusCode.BadRequest, dependencyFailure.StatusCode);
+
+        defaults["ViewMeterReadings"] = true;
+        defaults["ViewAssignedProperties"] = false;
+        var saved = await admin.PutAsJsonAsync("/api/role-permissions", new { role = "Manager", permissions = defaults, reason = "Revoke property visibility" });
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "manager-permissions@example.test", role = "Manager" })).StatusCode);
+        var invitationResponse = await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "manager-permissions-2@example.test", role = "Manager" });
+        Assert.Equal(HttpStatusCode.Created, invitationResponse.StatusCode);
+        var invitation = await ReadAsync<InvitationResponse>(invitationResponse);
+        using var managerClient = factory.CreateClient();
+        var accepted = await managerClient.PostAsJsonAsync("/api/auth/accept-invitation", new { token = invitation.InvitationToken, fullName = "Permission Manager", password = "StrongPass!123" });
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        var managerUser = await ReadAsync<ApiUserResponse>(accepted);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{managerUser.Id}", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await managerClient.GetAsync("/api/properties")).StatusCode);
+
+        var adminLockoutAttempt = await admin.PutAsJsonAsync("/api/role-permissions", new { role = "Admin", permissions = defaults, reason = "Should be rejected" });
+        Assert.Equal(HttpStatusCode.BadRequest, adminLockoutAttempt.StatusCode);
+    }
+
     private static async Task<T> ReadAsync<T>(HttpResponseMessage response)
     {
         response.EnsureSuccessStatusCode();
