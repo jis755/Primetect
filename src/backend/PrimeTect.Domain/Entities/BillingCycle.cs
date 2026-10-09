@@ -8,7 +8,13 @@ public sealed class BillingCycle
     {
     }
 
-    public BillingCycle(Guid organizationId, Guid propertyId, DateOnly billingMonth, Guid actorUserId)
+    public BillingCycle(
+        Guid organizationId,
+        Guid propertyId,
+        string propertyNameSnapshot,
+        string propertyAddressSnapshot,
+        DateOnly billingMonth,
+        Guid actorUserId)
     {
         if (billingMonth.Day != 1)
         {
@@ -18,6 +24,8 @@ public sealed class BillingCycle
         Id = Guid.NewGuid();
         OrganizationId = organizationId;
         PropertyId = propertyId;
+        PropertyNameSnapshot = propertyNameSnapshot;
+        PropertyAddressSnapshot = propertyAddressSnapshot;
         BillingMonth = billingMonth;
         Status = BillingCycleStatus.Draft;
         Version = 1;
@@ -30,6 +38,10 @@ public sealed class BillingCycle
     public Guid OrganizationId { get; private set; }
 
     public Guid PropertyId { get; private set; }
+
+    public string? PropertyNameSnapshot { get; private set; }
+
+    public string? PropertyAddressSnapshot { get; private set; }
 
     public DateOnly BillingMonth { get; private set; }
 

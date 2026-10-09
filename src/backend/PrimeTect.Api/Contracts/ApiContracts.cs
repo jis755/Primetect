@@ -105,3 +105,99 @@ public sealed record BillingCycleResponse(
     int BlockingBillCount,
     IReadOnlyList<BillingUnitBillResponse> Bills,
     IReadOnlyList<BillingAuditResponse> Audit);
+
+public sealed record BillingStatementChargeResponse(
+    Guid Id,
+    ChargeType ChargeType,
+    string ChargeName,
+    ChargeSettingMode SettingMode,
+    bool IsMetered,
+    decimal? Rate,
+    decimal? PreviousReading,
+    decimal? CurrentReading,
+    decimal? ConsumptionUnits,
+    decimal Amount);
+
+public sealed record BillingStatementUnitResponse(
+    string BillReference,
+    Guid BillId,
+    Guid UnitId,
+    string UnitName,
+    string? FloorName,
+    Guid? OccupancyAssignmentId,
+    Guid? TenantId,
+    string? TenantName,
+    string? TenantPhone,
+    DateOnly? OccupancyStartDate,
+    DateOnly? OccupancyEndDate,
+    decimal Total,
+    IReadOnlyList<BillingStatementChargeResponse> Charges);
+
+public sealed record BillingStatementResponse(
+    string StatementType,
+    Guid PropertyId,
+    Guid BillingCycleId,
+    string PropertyName,
+    string PropertyAddress,
+    DateOnly BillingMonth,
+    DateTimeOffset ApprovalDate,
+    decimal ApprovedTotal,
+    Guid? TenantId,
+    IReadOnlyList<BillingStatementUnitResponse> Bills);
+
+public sealed record BillingFloorSummaryResponse(
+    string FloorName,
+    decimal TotalBilled,
+    IReadOnlyList<BillingStatementUnitResponse> Bills);
+
+public sealed record BillingPropertySummaryResponse(
+    Guid PropertyId,
+    Guid BillingCycleId,
+    string PropertyName,
+    string PropertyAddress,
+    DateOnly BillingMonth,
+    DateTimeOffset ApprovalDate,
+    decimal ApprovedTotal,
+    IReadOnlyList<BillingFloorSummaryResponse> Floors);
+
+public sealed record BillingComparisonMetricResponse(
+    string Key,
+    ChargeType? ChargeType,
+    string Label,
+    decimal? CurrentAmount,
+    decimal? PreviousAmount,
+    decimal? Difference,
+    decimal? PercentageChange,
+    bool PercentageChangeAvailable,
+    int CurrentUnitCount,
+    int PreviousUnitCount,
+    bool CoverageChanged);
+
+public sealed record BillingComparisonConsumptionResponse(
+    decimal? CurrentUnits,
+    decimal? PreviousUnits,
+    decimal? Difference,
+    decimal? PercentageChange,
+    bool PercentageChangeAvailable,
+    int CurrentUnitCount,
+    int PreviousUnitCount,
+    bool CoverageChanged);
+
+public sealed record BillingComparisonResponse(
+    Guid PropertyId,
+    string PropertyName,
+    string PropertyAddress,
+    DateOnly BillingMonth,
+    Guid BillingCycleId,
+    decimal CurrentApprovedTotal,
+    decimal? PreviousApprovedTotal,
+    decimal? TotalDifference,
+    decimal? TotalPercentageChange,
+    bool TotalPercentageChangeAvailable,
+    DateOnly PreviousMonth,
+    string PreviousPeriodStatus,
+    bool IsComplete,
+    string? IncompleteReason,
+    BillingComparisonConsumptionResponse Electricity,
+    IReadOnlyList<BillingComparisonMetricResponse> Charges,
+    IReadOnlyList<string> CoverageNotes);

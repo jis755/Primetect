@@ -285,8 +285,16 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("PropertyAddressSnapshot")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
                     b.Property<Guid>("PropertyId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("PropertyNameSnapshot")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("ReturnReason")
                         .HasColumnType("text");
@@ -337,6 +345,10 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("ElectricityWarning")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("FloorNameSnapshot")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<Guid?>("OccupancyAssignmentId")
                         .HasColumnType("uuid");

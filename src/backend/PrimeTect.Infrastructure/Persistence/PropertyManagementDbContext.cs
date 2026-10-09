@@ -143,6 +143,8 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.ToTable("billing_cycles");
             entity.HasKey(cycle => cycle.Id);
             entity.Property(cycle => cycle.BillingMonth).HasColumnType("date");
+            entity.Property(cycle => cycle.PropertyNameSnapshot).HasMaxLength(200);
+            entity.Property(cycle => cycle.PropertyAddressSnapshot).HasMaxLength(500);
             entity.Property(cycle => cycle.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             entity.Property(cycle => cycle.Version).IsConcurrencyToken();
             entity.Property(cycle => cycle.ApprovedTotal).HasPrecision(18, 2);
@@ -155,6 +157,7 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.ToTable("billing_unit_bills");
             entity.HasKey(bill => bill.Id);
             entity.Property(bill => bill.UnitNameSnapshot).HasMaxLength(100).IsRequired();
+            entity.Property(bill => bill.FloorNameSnapshot).HasMaxLength(100);
             entity.Property(bill => bill.TenantNameSnapshot).HasMaxLength(200);
             entity.Property(bill => bill.TenantPhoneSnapshot).HasMaxLength(50);
             entity.Property(bill => bill.BlockingReason).HasMaxLength(300);

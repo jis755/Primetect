@@ -11,6 +11,7 @@ public sealed class BillingUnitBill
         Guid billingCycleId,
         Guid unitId,
         string unitNameSnapshot,
+        string? floorNameSnapshot,
         Guid? occupancyAssignmentId,
         Guid? tenantId,
         string? tenantNameSnapshot,
@@ -24,6 +25,7 @@ public sealed class BillingUnitBill
         BillingCycleId = billingCycleId;
         UnitId = unitId;
         UnitNameSnapshot = unitNameSnapshot;
+        FloorNameSnapshot = floorNameSnapshot;
         OccupancyAssignmentId = occupancyAssignmentId;
         TenantId = tenantId;
         TenantNameSnapshot = tenantNameSnapshot;
@@ -43,6 +45,8 @@ public sealed class BillingUnitBill
     public Guid UnitId { get; private set; }
 
     public string UnitNameSnapshot { get; private set; } = string.Empty;
+
+    public string? FloorNameSnapshot { get; private set; }
 
     public Guid? OccupancyAssignmentId { get; private set; }
 

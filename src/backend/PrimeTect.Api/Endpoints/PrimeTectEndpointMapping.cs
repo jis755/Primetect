@@ -51,6 +51,10 @@ public static class PrimeTectEndpointMapping
         secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)PutUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles", (Delegate)GenerateBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-cycles/{billingMonth}", (Delegate)GetBillingCycleAsync);
+        secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/units/{unitId:guid}", (Delegate)GetUnitBillingStatementAsync);
+        secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/tenants/{tenantId:guid}", (Delegate)GetTenantBillingStatementAsync);
+        secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/property-summary", (Delegate)GetPropertyBillingSummaryAsync);
+        secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/comparison", (Delegate)GetMonthlyBillingComparisonAsync);
         secure.MapPut("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/meter-readings", (Delegate)SaveBillingReadingsAsync);
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/submit", (Delegate)SubmitBillingCycleAsync);
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
@@ -965,7 +969,7 @@ public static class PrimeTectEndpointMapping
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            var cycle = new BillingCycle(actor.OrganizationId, propertyId, request.BillingMonth, actor.UserId);
+            var cycle = new BillingCycle(actor.OrganizationId, propertyId, property.Name, property.Address, request.BillingMonth, actor.UserId);
             db.BillingCycles.Add(cycle);
 
             var monthEnd = request.BillingMonth.AddMonths(1).AddDays(-1);
@@ -973,6 +977,9 @@ public static class PrimeTectEndpointMapping
                 .Where(unit => unit.OrganizationId == actor.OrganizationId && unit.PropertyId == propertyId && unit.IsEnabled && !unit.IsArchived)
                 .OrderBy(unit => unit.FloorId).ThenBy(unit => unit.Name)
                 .ToListAsync(cancellationToken);
+            var floorNames = await db.Floors.AsNoTracking()
+                .Where(floor => floor.PropertyId == propertyId && floor.OrganizationId == actor.OrganizationId)
+                .ToDictionaryAsync(floor => floor.Id, floor => floor.Name, cancellationToken);
             var unitIds = units.Select(unit => unit.Id).ToArray();
             var occupancy = await db.OccupancyAssignments.AsNoTracking()
                 .Where(item => item.OrganizationId == actor.OrganizationId && unitIds.Contains(item.UnitId) && item.StartDate <= monthEnd && (item.EndDate == null || item.EndDate >= request.BillingMonth))
@@ -1021,6 +1028,7 @@ public static class PrimeTectEndpointMapping
                     cycle.Id,
                     unit.Id,
                     unit.Name,
+                    floorNames.GetValueOrDefault(unit.FloorId),
                     selectedOccupancy?.Assignment.Id,
                     selectedOccupancy?.Assignment.TenantId,
                     selectedOccupancy?.TenantName,
@@ -1091,6 +1099,234 @@ public static class PrimeTectEndpointMapping
         return cycle is null
             ? Results.NotFound()
             : Results.Ok(await ToBillingCycleResponseAsync(db, cycle.Id, cancellationToken));
+    }
+
+    private static async Task<IResult> GetUnitBillingStatementAsync(
+        Guid propertyId,
+        string billingMonth,
+        Guid unitId,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
+        {
+            return BadRequest("Billing month must use the yyyy-MM format.");
+        }
+
+        var loaded = await LoadApprovedReportCycleAsync(db, actor, propertyId, month, cancellationToken);
+        if (loaded.Property is null || loaded.Cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        var metadataError = ApprovedReportMetadataError(loaded.Cycle);
+        if (metadataError is not null)
+        {
+            return Results.Conflict(new { message = metadataError });
+        }
+
+        var bill = await db.BillingUnitBills.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId
+            && item.BillingCycleId == loaded.Cycle.Id
+            && item.UnitId == unitId, cancellationToken);
+        if (bill is null)
+        {
+            return Results.NotFound();
+        }
+
+        var lines = await db.BillingChargeLines.AsNoTracking()
+            .Where(item => item.BillingUnitBillId == bill.Id)
+            .OrderBy(item => item.ChargeType)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(ToBillingStatementResponse(loaded.Cycle, "Unit", null, [ToBillingStatementUnitResponse(bill, lines)]));
+    }
+
+    private static async Task<IResult> GetTenantBillingStatementAsync(
+        Guid propertyId,
+        string billingMonth,
+        Guid tenantId,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
+        {
+            return BadRequest("Billing month must use the yyyy-MM format.");
+        }
+
+        var loaded = await LoadApprovedReportCycleAsync(db, actor, propertyId, month, cancellationToken);
+        if (loaded.Property is null || loaded.Cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        var metadataError = ApprovedReportMetadataError(loaded.Cycle);
+        if (metadataError is not null)
+        {
+            return Results.Conflict(new { message = metadataError });
+        }
+
+        var bills = await db.BillingUnitBills.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.BillingCycleId == loaded.Cycle.Id && item.TenantId == tenantId && item.OccupancyAssignmentId != null)
+            .OrderBy(item => item.UnitNameSnapshot)
+            .ToListAsync(cancellationToken);
+        if (bills.Count == 0)
+        {
+            return Results.NotFound();
+        }
+
+        var billIds = bills.Select(item => item.Id).ToArray();
+        var lines = await db.BillingChargeLines.AsNoTracking()
+            .Where(item => billIds.Contains(item.BillingUnitBillId))
+            .OrderBy(item => item.ChargeType)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(ToBillingStatementResponse(loaded.Cycle, "Tenant", tenantId, bills.Select(bill => ToBillingStatementUnitResponse(bill, lines.Where(line => line.BillingUnitBillId == bill.Id))).ToList()));
+    }
+
+    private static async Task<IResult> GetPropertyBillingSummaryAsync(
+        Guid propertyId,
+        string billingMonth,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
+        {
+            return BadRequest("Billing month must use the yyyy-MM format.");
+        }
+
+        var loaded = await LoadApprovedReportCycleAsync(db, actor, propertyId, month, cancellationToken);
+        if (loaded.Property is null || loaded.Cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        var metadataError = ApprovedReportMetadataError(loaded.Cycle);
+        if (metadataError is not null)
+        {
+            return Results.Conflict(new { message = metadataError });
+        }
+
+        var bills = await db.BillingUnitBills.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.BillingCycleId == loaded.Cycle.Id)
+            .OrderBy(item => item.FloorNameSnapshot)
+            .ThenBy(item => item.UnitNameSnapshot)
+            .ToListAsync(cancellationToken);
+        if (bills.Any(item => string.IsNullOrWhiteSpace(item.FloorNameSnapshot)))
+        {
+            return Results.Conflict(new { message = "This approved cycle is missing historical floor snapshots; the property summary cannot safely substitute current floor data." });
+        }
+
+        var billIds = bills.Select(item => item.Id).ToArray();
+        var lines = await db.BillingChargeLines.AsNoTracking()
+            .Where(item => billIds.Contains(item.BillingUnitBillId))
+            .OrderBy(item => item.ChargeType)
+            .ToListAsync(cancellationToken);
+        var floors = bills.GroupBy(item => item.FloorNameSnapshot!, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => new BillingFloorSummaryResponse(
+                group.Key,
+                RoundMoney(group.Sum(bill => bill.Total)),
+                group.Select(bill => ToBillingStatementUnitResponse(bill, lines.Where(line => line.BillingUnitBillId == bill.Id))).ToList()))
+            .ToList();
+        return Results.Ok(new BillingPropertySummaryResponse(
+            loaded.Cycle.PropertyId,
+            loaded.Cycle.Id,
+            loaded.Cycle.PropertyNameSnapshot!,
+            loaded.Cycle.PropertyAddressSnapshot!,
+            loaded.Cycle.BillingMonth,
+            loaded.Cycle.ApprovedAtUtc!.Value,
+            loaded.Cycle.ApprovedTotal!.Value,
+            floors));
+    }
+
+    private static async Task<IResult> GetMonthlyBillingComparisonAsync(
+        Guid propertyId,
+        string billingMonth,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
+        {
+            return BadRequest("Billing month must use the yyyy-MM format.");
+        }
+
+        var loaded = await LoadApprovedReportCycleAsync(db, actor, propertyId, month, cancellationToken);
+        if (loaded.Property is null || loaded.Cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        var metadataError = ApprovedReportMetadataError(loaded.Cycle);
+        if (metadataError is not null)
+        {
+            return Results.Conflict(new { message = metadataError });
+        }
+
+        var current = await LoadComparisonSourceAsync(db, actor.OrganizationId, loaded.Cycle.Id, cancellationToken);
+        var previousMonth = month.AddMonths(-1);
+        var previousCycle = await db.BillingCycles.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.BillingMonth == previousMonth, cancellationToken);
+        var previous = previousCycle?.Status == BillingCycleStatus.Approved
+            ? await LoadComparisonSourceAsync(db, actor.OrganizationId, previousCycle.Id, cancellationToken)
+            : null;
+        var incompleteReason = previousCycle is null
+            ? "The immediately preceding billing period is missing; comparison values are unavailable, not zero."
+            : previous is null
+                ? $"The immediately preceding billing period is {previousCycle.Status.ToString().ToLowerInvariant()}, not approved; comparison values are unavailable, not zero."
+                : null;
+        var currentCharges = BuildChargeBuckets(current);
+        var previousCharges = previous is null ? new Dictionary<ChargeMetricKey, ChargeMetricBucket>() : BuildChargeBuckets(previous);
+        var chargeKeys = currentCharges.Keys.Union(previousCharges.Keys).OrderBy(key => key.ChargeType).ThenBy(key => key.Label, StringComparer.Ordinal).ToList();
+        var chargeMetrics = chargeKeys.Select(key => ToComparisonMetric(key, currentCharges.GetValueOrDefault(key), previousCharges.GetValueOrDefault(key))).ToList();
+        var electricity = ToConsumptionComparison(current, previous);
+        var coverageNotes = BuildCoverageNotes(current, previous, incompleteReason);
+        var totalComparison = ToComparisonValues(loaded.Cycle.ApprovedTotal, previousCycle?.ApprovedTotal, previous is not null);
+
+        return Results.Ok(new BillingComparisonResponse(
+            loaded.Cycle.PropertyId,
+            loaded.Cycle.PropertyNameSnapshot!,
+            loaded.Cycle.PropertyAddressSnapshot!,
+            loaded.Cycle.BillingMonth,
+            loaded.Cycle.Id,
+            loaded.Cycle.ApprovedTotal!.Value,
+            previousCycle?.ApprovedTotal is null || previous is null ? null : previousCycle.ApprovedTotal,
+            totalComparison.Difference,
+            totalComparison.PercentageChange,
+            totalComparison.PercentageChangeAvailable,
+            previousMonth,
+            previousCycle?.Status.ToString() ?? "Missing",
+            previous is not null,
+            incompleteReason,
+            electricity,
+            chargeMetrics,
+            coverageNotes));
     }
 
     private static async Task<IResult> SaveBillingReadingsAsync(
@@ -1363,6 +1599,216 @@ public static class PrimeTectEndpointMapping
         }
     }
 
+    private static async Task<(Property? Property, BillingCycle? Cycle)> LoadApprovedReportCycleAsync(
+        PropertyManagementDbContext db,
+        RequestUser actor,
+        Guid propertyId,
+        DateOnly billingMonth,
+        CancellationToken cancellationToken)
+    {
+        var property = await AccessibleProperties(db, actor, includeArchived: false)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return (null, null);
+        }
+
+        var cycle = await db.BillingCycles.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId
+            && item.PropertyId == propertyId
+            && item.BillingMonth == billingMonth
+            && item.Status == BillingCycleStatus.Approved, cancellationToken);
+        return (property, cycle);
+    }
+
+    private static string? ApprovedReportMetadataError(BillingCycle cycle)
+    {
+        if (cycle.ApprovedAtUtc is null || cycle.ApprovedTotal is null)
+        {
+            return "This approved cycle is missing approval metadata and cannot be printed as an official statement.";
+        }
+
+        if (string.IsNullOrWhiteSpace(cycle.PropertyNameSnapshot) || string.IsNullOrWhiteSpace(cycle.PropertyAddressSnapshot))
+        {
+            return "This approved cycle is missing historical property snapshots; the report cannot safely substitute current property data.";
+        }
+
+        return null;
+    }
+
+    private static BillingStatementResponse ToBillingStatementResponse(
+        BillingCycle cycle,
+        string statementType,
+        Guid? tenantId,
+        IReadOnlyList<BillingStatementUnitResponse> bills) =>
+        new(
+            statementType,
+            cycle.PropertyId,
+            cycle.Id,
+            cycle.PropertyNameSnapshot!,
+            cycle.PropertyAddressSnapshot!,
+            cycle.BillingMonth,
+            cycle.ApprovedAtUtc!.Value,
+            cycle.ApprovedTotal!.Value,
+            tenantId,
+            bills);
+
+    private static BillingStatementUnitResponse ToBillingStatementUnitResponse(
+        BillingUnitBill bill,
+        IEnumerable<BillingChargeLine> lines) =>
+        new(
+            $"PT-{bill.Id:N}",
+            bill.Id,
+            bill.UnitId,
+            bill.UnitNameSnapshot,
+            bill.FloorNameSnapshot,
+            bill.OccupancyAssignmentId,
+            bill.TenantId,
+            bill.TenantNameSnapshot,
+            bill.TenantPhoneSnapshot,
+            bill.OccupancyStartDate,
+            bill.OccupancyEndDate,
+            bill.Total,
+            lines.Select(line => new BillingStatementChargeResponse(
+                line.Id,
+                line.ChargeType,
+                line.ChargeNameSnapshot,
+                line.SettingModeSnapshot,
+                line.IsMetered,
+                line.RateSnapshot,
+                line.PreviousReading,
+                line.CurrentReading,
+                line.ConsumptionUnits,
+                line.Amount)).ToList());
+
+    private static async Task<ComparisonSource> LoadComparisonSourceAsync(
+        PropertyManagementDbContext db,
+        Guid organizationId,
+        Guid billingCycleId,
+        CancellationToken cancellationToken)
+    {
+        var bills = await db.BillingUnitBills.AsNoTracking()
+            .Where(item => item.OrganizationId == organizationId && item.BillingCycleId == billingCycleId)
+            .ToListAsync(cancellationToken);
+        var billIds = bills.Select(item => item.Id).ToArray();
+        var lines = await db.BillingChargeLines.AsNoTracking()
+            .Where(item => item.OrganizationId == organizationId && billIds.Contains(item.BillingUnitBillId))
+            .ToListAsync(cancellationToken);
+        return new ComparisonSource(bills, lines);
+    }
+
+    private static Dictionary<ChargeMetricKey, ChargeMetricBucket> BuildChargeBuckets(ComparisonSource source)
+    {
+        var unitByBill = source.Bills.ToDictionary(item => item.Id, item => item.UnitId);
+        return source.Lines
+            .GroupBy(line => new ChargeMetricKey(line.ChargeType, line.ChargeNameSnapshot))
+            .ToDictionary(
+                group => group.Key,
+                group => new ChargeMetricBucket(
+                    RoundMoney(group.Sum(line => line.Amount)),
+                    group.Where(line => unitByBill.ContainsKey(line.BillingUnitBillId)).Select(line => unitByBill[line.BillingUnitBillId]).ToHashSet()));
+    }
+
+    private static BillingComparisonMetricResponse ToComparisonMetric(
+        ChargeMetricKey key,
+        ChargeMetricBucket? current,
+        ChargeMetricBucket? previous)
+    {
+        var values = ToComparisonValues(current?.Amount, previous?.Amount, current is not null && previous is not null);
+        return new BillingComparisonMetricResponse(
+            $"{key.ChargeType}:{key.Label}",
+            key.ChargeType,
+            key.Label,
+            current?.Amount,
+            previous?.Amount,
+            values.Difference,
+            values.PercentageChange,
+            values.PercentageChangeAvailable,
+            current?.UnitIds.Count ?? 0,
+            previous?.UnitIds.Count ?? 0,
+            current is null || previous is null || !current.UnitIds.SetEquals(previous.UnitIds));
+    }
+
+    private static BillingComparisonConsumptionResponse ToConsumptionComparison(ComparisonSource current, ComparisonSource? previous)
+    {
+        var currentLines = current.Lines.Where(line => line.ChargeType == ChargeType.Electricity).ToList();
+        var previousLines = previous?.Lines.Where(line => line.ChargeType == ChargeType.Electricity).ToList() ?? [];
+        var currentUnitsByBill = current.Bills.ToDictionary(item => item.Id, item => item.UnitId);
+        var previousUnitsByBill = previous?.Bills.ToDictionary(item => item.Id, item => item.UnitId) ?? [];
+        var currentUnitIds = currentLines.Where(line => currentUnitsByBill.ContainsKey(line.BillingUnitBillId)).Select(line => currentUnitsByBill[line.BillingUnitBillId]).ToHashSet();
+        var previousUnitIds = previousLines.Where(line => previousUnitsByBill.ContainsKey(line.BillingUnitBillId)).Select(line => previousUnitsByBill[line.BillingUnitBillId]).ToHashSet();
+        decimal? currentValue = currentLines.Count > 0 && currentLines.All(line => line.ConsumptionUnits is not null)
+            ? RoundMoney(currentLines.Sum(line => line.ConsumptionUnits!.Value))
+            : null;
+        decimal? previousValue = previous is not null && previousLines.Count > 0 && previousLines.All(line => line.ConsumptionUnits is not null)
+            ? RoundMoney(previousLines.Sum(line => line.ConsumptionUnits!.Value))
+            : null;
+        var values = ToComparisonValues(currentValue, previousValue, previous is not null);
+        return new BillingComparisonConsumptionResponse(
+            currentValue,
+            previousValue,
+            values.Difference,
+            values.PercentageChange,
+            values.PercentageChangeAvailable,
+            currentUnitIds.Count,
+            previousUnitIds.Count,
+            previous is null || !currentUnitIds.SetEquals(previousUnitIds));
+    }
+
+    private static IReadOnlyList<string> BuildCoverageNotes(ComparisonSource current, ComparisonSource? previous, string? incompleteReason)
+    {
+        var notes = new List<string>();
+        if (incompleteReason is not null)
+        {
+            notes.Add(incompleteReason);
+            return notes;
+        }
+
+        var currentUnits = current.Bills.Select(item => item.UnitId).ToHashSet();
+        var previousUnits = previous!.Bills.Select(item => item.UnitId).ToHashSet();
+        var added = currentUnits.Except(previousUnits).Count();
+        var removed = previousUnits.Except(currentUnits).Count();
+        if (added > 0 || removed > 0)
+        {
+            notes.Add($"Unit coverage changed: {added} added and {removed} removed from the approved snapshot.");
+        }
+
+        var currentKeys = BuildChargeBuckets(current).Keys.ToHashSet();
+        var previousKeys = BuildChargeBuckets(previous).Keys.ToHashSet();
+        var addedCharges = currentKeys.Except(previousKeys).Count();
+        var removedCharges = previousKeys.Except(currentKeys).Count();
+        if (addedCharges > 0 || removedCharges > 0)
+        {
+            notes.Add($"Applicable charge coverage changed: {addedCharges} categories added and {removedCharges} removed from the approved snapshot.");
+        }
+
+        if (notes.Count == 0)
+        {
+            notes.Add("Unit and applicable-charge coverage matches the immediately preceding approved snapshot.");
+        }
+
+        return notes;
+    }
+
+    private static ComparisonValues ToComparisonValues(decimal? current, decimal? previous, bool previousAvailable)
+    {
+        if (!previousAvailable || current is null || previous is null)
+        {
+            return new ComparisonValues(null, null, false);
+        }
+
+        if (previous.Value == 0m)
+        {
+            return new ComparisonValues(RoundMoney(current.Value - previous.Value), null, false);
+        }
+
+        return new ComparisonValues(
+            RoundMoney(current.Value - previous.Value),
+            decimal.Round((current.Value - previous.Value) / previous.Value * 100m, 2, MidpointRounding.AwayFromZero),
+            true);
+    }
+
     private static async Task<BillingCycle?> AccessibleBillingCycleAsync(
         PropertyManagementDbContext db,
         RequestUser actor,
@@ -1475,6 +1921,14 @@ public static class PrimeTectEndpointMapping
     private static decimal RoundMoney(decimal amount) => decimal.Round(amount, 2, MidpointRounding.AwayFromZero);
 
     private sealed record OccupancySnapshot(OccupancyAssignment Assignment, string? TenantName, string? TenantPhone);
+
+    private sealed record ComparisonSource(IReadOnlyList<BillingUnitBill> Bills, IReadOnlyList<BillingChargeLine> Lines);
+
+    private sealed record ChargeMetricKey(ChargeType ChargeType, string Label);
+
+    private sealed record ChargeMetricBucket(decimal Amount, HashSet<Guid> UnitIds);
+
+    private sealed record ComparisonValues(decimal? Difference, decimal? PercentageChange, bool PercentageChangeAvailable);
 
     private sealed record EffectiveCharge(ChargeType ChargeType, string ChargeName, ChargeSettingMode Mode, decimal Amount);
 

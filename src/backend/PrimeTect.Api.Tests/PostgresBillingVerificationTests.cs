@@ -87,9 +87,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 2 || pending.Any())
+            if (applied.Count() != 3 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected two applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected three applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)
@@ -106,6 +106,7 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
             throw new InvalidOperationException(Blocker);
         }
 
+        EnsureGeneratedDatabaseTarget(ConnectionString);
         var connection = new NpgsqlConnection(ConnectionString);
         await connection.OpenAsync();
         return connection;
@@ -120,7 +121,17 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
             Database = database,
             Pooling = false,
         };
+        EnsureGeneratedDatabaseTarget(builder.ConnectionString);
         return builder.ConnectionString;
+    }
+
+    private void EnsureGeneratedDatabaseTarget(string connectionString)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString);
+        if (!string.Equals(builder.Database, databaseName, StringComparison.Ordinal) || !IsSafeGeneratedName(builder.Database ?? string.Empty))
+        {
+            throw new InvalidOperationException("The effective PostgreSQL verification connection must target only the generated disposable database.");
+        }
     }
 
     private async Task DropCreatedDatabaseAsync()
@@ -243,7 +254,7 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(2L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(3L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));
@@ -416,6 +427,122 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal(HttpStatusCode.Conflict, staleSubmit.StatusCode);
     }
 
+    [PostgresFact]
+    public async Task Approved_reports_group_by_snapshot_identity_and_mark_incomplete_comparisons()
+    {
+        RequirePostgres();
+
+        using var api = new PostgresPrimeTectApiFactory(database.ConnectionString);
+        using var admin = api.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var adminEmail = $"reports-admin-{suffix}@example.test";
+        await RegisterAsync(admin, adminEmail, "Reports Admin");
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"reports-manager-{suffix}@example.test", role = "Manager" }));
+        using var manager = api.CreateClient();
+        await AcceptInvitationAsync(manager, invitation.InvitationToken, "Reports Manager");
+
+        var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Snapshot Property {suffix}",
+            address = "5 Report Street",
+            propertyType = "ApartmentBuilding",
+            floors = new[]
+            {
+                new { name = "Ground", unitCount = 2, unitNames = new[] { "A-1", "A-2" } },
+                new { name = "Upper", unitCount = 1, unitNames = new[] { "B-1" } },
+            },
+        }));
+        var tenantOne = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null }));
+        var tenantTwo = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null }));
+        var groundUnits = property.Floors[0].Units;
+        var upperUnit = property.Floors[1].Units.Single();
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{groundUnits[0].Id}/occupancy", new { tenantId = tenantOne.Id, startDate = "2026-01-01", endDate = (string?)null })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{groundUnits[1].Id}/occupancy", new { tenantId = tenantOne.Id, startDate = "2026-01-01", endDate = (string?)null })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{upperUnit.Id}/occupancy", new { tenantId = tenantTwo.Id, startDate = "2026-01-01", endDate = (string?)null })).StatusCode);
+
+        await PutChargesAsync(admin, property.Id, new[]
+        {
+            new { chargeType = "Electricity", mode = "Custom", billingMonth = "2026-01-01", amount = (decimal?)10m, customLabel = (string?)null },
+            new { chargeType = "Custom", mode = "Custom", billingMonth = "2026-01-01", amount = (decimal?)0m, customLabel = (string?)"Storage" },
+            new { chargeType = "Electricity", mode = "Custom", billingMonth = "2026-02-01", amount = (decimal?)20m, customLabel = (string?)null },
+            new { chargeType = "Custom", mode = "Custom", billingMonth = "2026-02-01", amount = (decimal?)10m, customLabel = (string?)"Storage" },
+        });
+
+        var january = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-01-01" }));
+        var januarySaved = await ReadAsync<BillingCycleResponse>(await manager.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{january.Id}/meter-readings", new
+        {
+            expectedVersion = january.Version,
+            reason = "Opening readings entered for report verification",
+            entries = january.Bills.Select((bill, index) => new { unitBillId = bill.Id, previousReading = 100m + index, currentReading = 110m + index }).ToArray(),
+        }));
+        var januarySubmitted = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{january.Id}/submit", new { expectedVersion = januarySaved.Version }));
+        var januaryApproved = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{january.Id}/approve", new { expectedVersion = januarySubmitted.Version }));
+        Assert.Equal(BillingCycleStatus.Approved, januaryApproved.Status);
+
+        var february = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-02-01" }));
+        var februarySaved = await ReadAsync<BillingCycleResponse>(await manager.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{february.Id}/meter-readings", new
+        {
+            expectedVersion = february.Version,
+            reason = "Current readings entered for report verification",
+            entries = february.Bills.Select((bill, index) => new { unitBillId = bill.Id, previousReading = 110m + index, currentReading = 120m + index }).ToArray(),
+        }));
+        var februarySubmitted = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{february.Id}/submit", new { expectedVersion = februarySaved.Version }));
+        var februaryApproved = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{february.Id}/approve", new { expectedVersion = februarySubmitted.Version }));
+        Assert.Equal(BillingCycleStatus.Approved, februaryApproved.Status);
+
+        var tenantStatement = await ReadAsync<BillingStatementResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-reports/2026-02/tenants/{tenantOne.Id}"));
+        Assert.Equal(2, tenantStatement.Bills.Count);
+        Assert.All(tenantStatement.Bills, bill =>
+        {
+            Assert.Equal(tenantOne.Id, bill.TenantId);
+            Assert.Null(bill.TenantName);
+            Assert.Null(bill.TenantPhone);
+            Assert.Contains(bill.Charges, charge => charge.ChargeType == ChargeType.Electricity && charge.Rate == 20m);
+        });
+
+        var propertySummary = await ReadAsync<PropertySummaryResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-reports/2026-02/property-summary"));
+        Assert.Equal(2, propertySummary.Floors.Count);
+        Assert.Equal(februaryApproved.ApprovedTotal, propertySummary.ApprovedTotal);
+        Assert.Equal(new[] { "Ground", "Upper" }, propertySummary.Floors.Select(floor => floor.FloorName).OrderBy(name => name).ToArray());
+
+        var comparison = await ReadAsync<ComparisonResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-reports/2026-02/comparison"));
+        Assert.True(comparison.IsComplete);
+        Assert.Equal("Approved", comparison.PreviousPeriodStatus);
+        Assert.Equal(30m, comparison.Electricity.CurrentUnits);
+        Assert.Equal(30m, comparison.Electricity.PreviousUnits);
+        var zeroBaseline = comparison.Charges.Single(charge => charge.Label == "Storage");
+        Assert.Equal(0m, zeroBaseline.PreviousAmount);
+        Assert.Equal(30m, zeroBaseline.CurrentAmount);
+        Assert.False(zeroBaseline.PercentageChangeAvailable);
+        Assert.Null(zeroBaseline.PercentageChange);
+
+        await PutChargesAsync(admin, property.Id, new[] { new { chargeType = "Electricity", mode = "Custom", billingMonth = "2026-02-01", amount = (decimal?)99m, customLabel = (string?)null } });
+        var unchanged = await ReadAsync<BillingStatementResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-reports/2026-02/units/{groundUnits[0].Id}"));
+        Assert.Equal(20m, unchanged.Bills.Single().Charges.Single(charge => charge.ChargeType == ChargeType.Electricity).Rate);
+
+        var gapProperty = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Gap Property {suffix}",
+            address = "6 Report Street",
+            propertyType = "Shop",
+            floors = new[] { new { name = "Only", unitCount = 1, unitNames = new[] { "G-1" } } },
+        }));
+        var gapTenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = "Gap Tenant", phone = (string?)null }));
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{gapProperty.Id}/units/{gapProperty.Floors.Single().Units.Single().Id}/occupancy", new { tenantId = gapTenant.Id, startDate = "2026-03-01", endDate = (string?)null })).StatusCode);
+        await PutChargesAsync(admin, gapProperty.Id, new[] { new { chargeType = "ServiceCharge", mode = "Custom", billingMonth = "2026-03-01", amount = (decimal?)5m, customLabel = (string?)null } });
+        var gapDraft = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{gapProperty.Id}/billing-cycles", new { billingMonth = "2026-03-01" }));
+        var gapSubmitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{gapProperty.Id}/billing-cycles/{gapDraft.Id}/submit", new { expectedVersion = gapDraft.Version }));
+        await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{gapProperty.Id}/billing-cycles/{gapDraft.Id}/approve", new { expectedVersion = gapSubmitted.Version }));
+        var incomplete = await ReadAsync<ComparisonResponse>(await admin.GetAsync($"/api/properties/{gapProperty.Id}/billing-reports/2026-03/comparison"));
+        Assert.False(incomplete.IsComplete);
+        Assert.Equal("Missing", incomplete.PreviousPeriodStatus);
+        Assert.Contains("missing", incomplete.IncompleteReason!, StringComparison.OrdinalIgnoreCase);
+
+        using var otherOrganization = api.CreateClient();
+        await RegisterAsync(otherOrganization, $"unauthorized-reports-{suffix}@example.test", "Unauthorized Reports");
+        Assert.Equal(HttpStatusCode.NotFound, (await otherOrganization.GetAsync($"/api/properties/{property.Id}/billing-reports/2026-02/property-summary")).StatusCode);
+    }
+
     private void RequirePostgres()
     {
         if (!database.IsAvailable)
@@ -510,4 +637,20 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
     private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, decimal? CurrentReading, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, decimal Amount);
 
     private sealed record BillingAuditResponse(Guid Id, Guid ActorUserId, BillingAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
+
+    private sealed record BillingStatementResponse(string StatementType, Guid PropertyId, Guid BillingCycleId, string PropertyName, string PropertyAddress, DateOnly BillingMonth, DateTimeOffset ApprovalDate, decimal ApprovedTotal, Guid? TenantId, List<BillingStatementUnitResponse> Bills);
+
+    private sealed record BillingStatementUnitResponse(string BillReference, Guid BillId, Guid UnitId, string UnitName, string? FloorName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, DateOnly? OccupancyStartDate, DateOnly? OccupancyEndDate, decimal Total, List<BillingStatementChargeResponse> Charges);
+
+    private sealed record BillingStatementChargeResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, decimal? CurrentReading, decimal? ConsumptionUnits, decimal Amount);
+
+    private sealed record PropertySummaryResponse(Guid PropertyId, Guid BillingCycleId, string PropertyName, string PropertyAddress, DateOnly BillingMonth, DateTimeOffset ApprovalDate, decimal ApprovedTotal, List<PropertyFloorSummaryResponse> Floors);
+
+    private sealed record PropertyFloorSummaryResponse(string FloorName, decimal TotalBilled, List<BillingStatementUnitResponse> Bills);
+
+    private sealed record ComparisonResponse(Guid PropertyId, string PropertyName, string PropertyAddress, DateOnly BillingMonth, Guid BillingCycleId, decimal CurrentApprovedTotal, decimal? PreviousApprovedTotal, decimal? TotalDifference, decimal? TotalPercentageChange, bool TotalPercentageChangeAvailable, DateOnly PreviousMonth, string PreviousPeriodStatus, bool IsComplete, string? IncompleteReason, ComparisonConsumptionResponse Electricity, List<ComparisonMetricResponse> Charges, List<string> CoverageNotes);
+
+    private sealed record ComparisonConsumptionResponse(decimal? CurrentUnits, decimal? PreviousUnits, decimal? Difference, decimal? PercentageChange, bool PercentageChangeAvailable, int CurrentUnitCount, int PreviousUnitCount, bool CoverageChanged);
+
+    private sealed record ComparisonMetricResponse(string Key, ChargeType? ChargeType, string Label, decimal? CurrentAmount, decimal? PreviousAmount, decimal? Difference, decimal? PercentageChange, bool PercentageChangeAvailable, int CurrentUnitCount, int PreviousUnitCount, bool CoverageChanged);
 }

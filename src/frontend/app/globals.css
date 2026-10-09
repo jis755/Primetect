@@ -21,3 +21,47 @@ body {
   background: #e8b65a;
   color: #10231f;
 }
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .print-report,
+  .print-report * {
+    visibility: visible;
+  }
+
+  .print-report {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    margin: 0;
+    border: 0;
+    box-shadow: none;
+    background: #fff;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  table {
+    page-break-inside: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr,
+  .bill-section {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
