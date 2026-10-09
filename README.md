@@ -78,13 +78,27 @@ src/
 
 ```powershell
 dotnet build src/backend/PrimeTect.sln
-dotnet test src/backend/PrimeTect.sln
-cd src/frontend
+dotnet test src/backend/PrimeTect.sln --no-build --nologo --verbosity minimal
+Set-Location src/frontend
 npm run typecheck
 npm run build
 ```
 
-The API tests use a unique in-memory database and do not touch PostgreSQL. The frontend includes a small API status indicator that checks the health endpoint in the browser. No real secrets are committed; local credentials belong in ignored configuration files.
+Run these commands one at a time to limit memory use. The normal API workflow tests use unique in-memory EF Core databases and do not touch PostgreSQL. The frontend includes a small API status indicator that checks the health endpoint in the browser. No real secrets are committed; local credentials belong in ignored configuration files.
+
+### Disposable PostgreSQL verification
+
+The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
+
+PowerShell example (use a local password only; do not put this value in a tracked file):
+
+```powershell
+$env:PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION = "Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=<local-only-password>"
+dotnet test src/backend/PrimeTect.Api.Tests/PrimeTect.Api.Tests.csproj --filter FullyQualifiedName~PostgresBillingVerificationTests --nologo --verbosity normal
+Remove-Item Env:PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION
+```
+
+If the variable is absent, the PostgreSQL facts are reported as skipped with that reason. If it is supplied but the service is unavailable or the safety checks reject the connection, the facts fail with the exact blocker and no existing database is changed. They never fall back to InMemory storage. The tests cover migration application, numeric precision, duplicate cycle constraints, stale versions, organization/property authorization, self-approval, atomic approval/audit failure, immutable snapshots, immediately preceding approved-period readings, and missing-period/policy-gap blocking. The regular InMemory tests cover the broader workflow matrix, but cannot prove PostgreSQL-specific behavior.
 
 ## Current milestone
 
@@ -99,7 +113,7 @@ The API tests use a unique in-memory database and do not touch PostgreSQL. The f
 
 Monthly billing intentionally blocks unresolved policy cases instead of inventing allocations: mid-month tenant changes/partial-month charges, vacant-unit charges, and any cycle without a contiguous immediately preceding approved period require explicit review. Meter resets or replacements are not bypassed by the opening-reading field and need a separate documented workflow. Email delivery, email verification, two-factor authentication, billing collection/payment actions, SafeDocs integration, SMS, police actions, and deployment are not implemented.
 
-The EF Core migrations `InitialPrimeTect` and `MonthlyBillingMilestone` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. Backend workflow tests use isolated in-memory EF Core storage; they do not verify PostgreSQL-specific SQL, indexes, numeric precision behavior, or a real migration application.
+The EF Core migrations `InitialPrimeTect` and `MonthlyBillingMilestone` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database.
 
 ## npm audit review
 
