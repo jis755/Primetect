@@ -225,6 +225,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 4)
                         .HasColumnType("numeric(18,4)");
 
+                    b.Property<DateOnly?>("CurrentReadingDate")
+                        .HasColumnType("date");
+
                     b.Property<bool>("IsMetered")
                         .HasColumnType("boolean");
 
@@ -234,6 +237,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<decimal?>("PreviousReading")
                         .HasPrecision(18, 4)
                         .HasColumnType("numeric(18,4)");
+
+                    b.Property<DateOnly?>("PreviousReadingDate")
+                        .HasColumnType("date");
 
                     b.Property<string>("PreviousReadingSource")
                         .IsRequired()
@@ -248,6 +254,13 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
+
+                    b.Property<bool>("WarningEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal?>("WarningThreshold")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
 
                     b.HasKey("Id");
 
@@ -434,6 +447,15 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid?>("UnitId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("WarningMode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<decimal?>("WarningThreshold")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
 
                     b.HasKey("Id");
 

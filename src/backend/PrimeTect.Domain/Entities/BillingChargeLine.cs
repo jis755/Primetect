@@ -18,7 +18,10 @@ public sealed class BillingChargeLine
         decimal? rateSnapshot,
         decimal amount,
         decimal? previousReading,
-        MeterReadingSource previousReadingSource)
+        MeterReadingSource previousReadingSource,
+        DateOnly? previousReadingDate,
+        bool warningEnabled,
+        decimal? warningThreshold)
     {
         Id = Guid.NewGuid();
         OrganizationId = organizationId;
@@ -31,6 +34,9 @@ public sealed class BillingChargeLine
         Amount = amount;
         PreviousReading = previousReading;
         PreviousReadingSource = previousReadingSource;
+        PreviousReadingDate = previousReadingDate;
+        WarningEnabled = warningEnabled;
+        WarningThreshold = warningThreshold;
     }
 
     public Guid Id { get; private set; }
@@ -51,20 +57,37 @@ public sealed class BillingChargeLine
 
     public decimal? PreviousReading { get; private set; }
 
+    public DateOnly? PreviousReadingDate { get; private set; }
+
     public decimal? CurrentReading { get; private set; }
 
     public decimal? ConsumptionUnits { get; private set; }
 
     public MeterReadingSource PreviousReadingSource { get; private set; }
 
+    public bool WarningEnabled { get; private set; }
+
+    public decimal? WarningThreshold { get; private set; }
+
     public decimal Amount { get; private set; }
 
-    public void SetMeterReadings(decimal? previousReading, decimal? currentReading, MeterReadingSource previousReadingSource, decimal? consumptionUnits, decimal amount)
+    public void SetMeterReadings(
+        decimal? previousReading,
+        DateOnly? previousReadingDate,
+        decimal? currentReading,
+        DateOnly? currentReadingDate,
+        MeterReadingSource previousReadingSource,
+        decimal? consumptionUnits,
+        decimal amount)
     {
         PreviousReading = previousReading;
+        PreviousReadingDate = previousReadingDate;
         CurrentReading = currentReading;
+        CurrentReadingDate = currentReadingDate;
         PreviousReadingSource = previousReadingSource;
         ConsumptionUnits = consumptionUnits;
         Amount = amount;
     }
+
+    public DateOnly? CurrentReadingDate { get; private set; }
 }

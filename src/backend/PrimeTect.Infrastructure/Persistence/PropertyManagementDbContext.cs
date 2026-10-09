@@ -121,6 +121,8 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(configuration => configuration.ChargeType).HasConversion<string>().HasMaxLength(40).IsRequired();
             entity.Property(configuration => configuration.Mode).HasConversion<string>().HasMaxLength(20).IsRequired();
             entity.Property(configuration => configuration.Amount).HasPrecision(18, 4);
+            entity.Property(configuration => configuration.WarningMode).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(configuration => configuration.WarningThreshold).HasPrecision(18, 2);
             entity.Property(configuration => configuration.CustomLabel).HasMaxLength(120);
             entity.HasIndex(configuration => new { configuration.OrganizationId, configuration.PropertyId, configuration.UnitId, configuration.ChargeType, configuration.BillingMonth });
             entity.HasOne<Property>().WithMany().HasForeignKey(configuration => configuration.PropertyId).OnDelete(DeleteBehavior.Cascade);
@@ -179,9 +181,12 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(line => line.PreviousReadingSource).HasConversion<string>().HasMaxLength(20).IsRequired();
             entity.Property(line => line.RateSnapshot).HasPrecision(18, 4);
             entity.Property(line => line.PreviousReading).HasPrecision(18, 4);
+            entity.Property(line => line.PreviousReadingDate).HasColumnType("date");
             entity.Property(line => line.CurrentReading).HasPrecision(18, 4);
+            entity.Property(line => line.CurrentReadingDate).HasColumnType("date");
             entity.Property(line => line.ConsumptionUnits).HasPrecision(18, 4);
             entity.Property(line => line.Amount).HasPrecision(18, 2);
+            entity.Property(line => line.WarningThreshold).HasPrecision(18, 2);
             entity.HasIndex(line => new { line.BillingUnitBillId, line.ChargeType }).IsUnique();
             entity.HasOne<BillingUnitBill>().WithMany().HasForeignKey(line => line.BillingUnitBillId).OnDelete(DeleteBehavior.Cascade);
         });

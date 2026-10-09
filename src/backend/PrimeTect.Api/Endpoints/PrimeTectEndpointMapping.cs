@@ -47,8 +47,10 @@ public static class PrimeTectEndpointMapping
         secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy/{assignmentId:guid}/close", (Delegate)CloseOccupancyAsync);
         secure.MapGet("/properties/{propertyId:guid}/charges", (Delegate)GetPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapPut("/properties/{propertyId:guid}/charges", (Delegate)PutPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
+        secure.MapPost("/properties/{propertyId:guid}/charges/{chargeType}/end", (Delegate)EndPropertyChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)GetUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)PutUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
+        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/charges/{chargeType}/end", (Delegate)EndUnitChargeAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles", (Delegate)GenerateBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-cycles/{billingMonth}", (Delegate)GetBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/billing-reports/{billingMonth}/units/{unitId:guid}", (Delegate)GetUnitBillingStatementAsync);
@@ -848,11 +850,11 @@ public static class PrimeTectEndpointMapping
                 && item.ChargeType == setting.ChargeType && item.BillingMonth == setting.BillingMonth, cancellationToken);
             if (existing is null)
             {
-                db.ChargeConfigurations.Add(new ChargeConfiguration(actor.OrganizationId, propertyId, null, setting.ChargeType, setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel));
+                db.ChargeConfigurations.Add(new ChargeConfiguration(actor.OrganizationId, propertyId, null, setting.ChargeType, setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel, setting.WarningMode, setting.WarningThreshold));
             }
             else
             {
-                existing.Update(setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel);
+                existing.Update(setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel, setting.WarningMode, setting.WarningThreshold);
             }
         }
 
@@ -920,16 +922,109 @@ public static class PrimeTectEndpointMapping
                 && item.ChargeType == setting.ChargeType && item.BillingMonth == setting.BillingMonth, cancellationToken);
             if (existing is null)
             {
-                db.ChargeConfigurations.Add(new ChargeConfiguration(actor.OrganizationId, propertyId, unitId, setting.ChargeType, setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel));
+                db.ChargeConfigurations.Add(new ChargeConfiguration(actor.OrganizationId, propertyId, unitId, setting.ChargeType, setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel, setting.WarningMode, setting.WarningThreshold));
             }
             else
             {
-                existing.Update(setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel);
+                existing.Update(setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel, setting.WarningMode, setting.WarningThreshold);
             }
         }
 
         await db.SaveChangesAsync(cancellationToken);
         return Results.Ok(await db.ChargeConfigurations.AsNoTracking().Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.UnitId == unitId).Select(item => ToChargeResponse(item)).ToListAsync(cancellationToken));
+    }
+
+    private static async Task<IResult> EndPropertyChargeAsync(
+        Guid propertyId,
+        string chargeType,
+        EndChargeRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        return await EndChargeAsync(propertyId, null, chargeType, request, httpContext, db, cancellationToken);
+    }
+
+    private static async Task<IResult> EndUnitChargeAsync(
+        Guid propertyId,
+        Guid unitId,
+        string chargeType,
+        EndChargeRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        return await EndChargeAsync(propertyId, unitId, chargeType, request, httpContext, db, cancellationToken);
+    }
+
+    private static async Task<IResult> EndChargeAsync(
+        Guid propertyId,
+        Guid? unitId,
+        string chargeType,
+        EndChargeRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!Enum.TryParse<ChargeType>(chargeType, true, out var parsedChargeType))
+        {
+            return BadRequest("The charge type is not recognized.");
+        }
+
+        if (request.BillingMonth.Day != 1)
+        {
+            return BadRequest("The effective billing month must be the first day of a month.");
+        }
+
+        if (unitId is null)
+        {
+            if (await AccessibleProperties(db, actor, false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken) is null)
+            {
+                return Results.NotFound();
+            }
+        }
+        else if (await AccessibleUnitAsync(db, actor, propertyId, unitId.Value, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        var existing = await db.ChargeConfigurations.FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId
+            && item.PropertyId == propertyId
+            && item.UnitId == unitId
+            && item.ChargeType == parsedChargeType
+            && item.BillingMonth == request.BillingMonth, cancellationToken);
+        if (existing is null)
+        {
+            db.ChargeConfigurations.Add(new ChargeConfiguration(
+                actor.OrganizationId,
+                propertyId,
+                unitId,
+                parsedChargeType,
+                ChargeSettingMode.Disabled,
+                request.BillingMonth,
+                null,
+                null,
+                ChargeSettingMode.Disabled,
+                null));
+        }
+        else
+        {
+            existing.Update(ChargeSettingMode.Disabled, request.BillingMonth, null, null, ChargeSettingMode.Disabled, null);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        var settings = db.ChargeConfigurations.AsNoTracking().Where(item =>
+            item.OrganizationId == actor.OrganizationId
+            && item.PropertyId == propertyId
+            && item.UnitId == unitId);
+        return Results.Ok(await settings.OrderBy(item => item.BillingMonth).ThenBy(item => item.ChargeType).Select(item => ToChargeResponse(item)).ToListAsync(cancellationToken));
     }
 
     private static async Task<IResult> GenerateBillingCycleAsync(
@@ -1049,9 +1144,23 @@ public static class PrimeTectEndpointMapping
                     var isMetered = effective.ChargeType == ChargeType.Electricity;
                     var previousLine = isMetered && previousElectricity.TryGetValue(unit.Id, out var line) ? line : null;
                     var previousReading = previousLine?.CurrentReading;
+                    var previousReadingDate = previousLine?.CurrentReadingDate;
                     var source = previousReading is null ? MeterReadingSource.Missing : MeterReadingSource.ApprovedPeriod;
                     var amount = isMetered ? 0m : RoundMoney(effective.Amount);
-                    var chargeLine = new BillingChargeLine(actor.OrganizationId, bill.Id, effective.ChargeType, effective.ChargeName, effective.Mode, isMetered, effective.Amount, amount, previousReading, source);
+                    var chargeLine = new BillingChargeLine(
+                        actor.OrganizationId,
+                        bill.Id,
+                        effective.ChargeType,
+                        effective.ChargeName,
+                        effective.Mode,
+                        isMetered,
+                        effective.Amount,
+                        amount,
+                        previousReading,
+                        source,
+                        previousReadingDate,
+                        effective.WarningMode == ChargeSettingMode.Custom,
+                        effective.WarningThreshold);
                     db.BillingChargeLines.Add(chargeLine);
                     billLines.Add(chargeLine);
                 }
@@ -1377,13 +1486,18 @@ public static class PrimeTectEndpointMapping
                 return BadRequest("The previous approved-period reading is a snapshot and cannot be changed.");
             }
 
+            if (line.PreviousReadingSource == MeterReadingSource.ApprovedPeriod && entry.PreviousReadingDate is not null && entry.PreviousReadingDate != line.PreviousReadingDate)
+            {
+                return BadRequest("The previous approved-period reading date is a snapshot and cannot be changed.");
+            }
+
             var previous = entry.PreviousReading ?? line.PreviousReading;
             if (previous is not null && entry.CurrentReading is not null && entry.CurrentReading < previous)
             {
                 return BadRequest("Negative electricity consumption is not allowed. Meter reset or replacement needs a separate documented workflow.");
             }
 
-            before.Add(new { entry.UnitBillId, line.PreviousReading, line.CurrentReading, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource });
+            before.Add(new { entry.UnitBillId, line.PreviousReading, line.PreviousReadingDate, line.CurrentReading, line.CurrentReadingDate, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource });
         }
 
         if (request.Entries is null || request.Entries.Count == 0)
@@ -1403,14 +1517,17 @@ public static class PrimeTectEndpointMapping
                     : previous is null ? MeterReadingSource.Missing : MeterReadingSource.OpeningEntry;
                 decimal? units = previous is not null && entry.CurrentReading is not null ? entry.CurrentReading.Value - previous.Value : null;
                 var amount = units is null ? 0m : RoundMoney(units.Value * (line.RateSnapshot ?? 0m));
-                line.SetMeterReadings(previous, entry.CurrentReading, source, units, amount);
+                var previousDate = line.PreviousReadingSource == MeterReadingSource.ApprovedPeriod
+                    ? line.PreviousReadingDate
+                    : entry.PreviousReadingDate;
+                line.SetMeterReadings(previous, previousDate, entry.CurrentReading, entry.CurrentReadingDate, source, units, amount);
                 RecalculateBillState(billById[entry.UnitBillId], lines.Where(item => item.BillingUnitBillId == entry.UnitBillId));
             }
 
             var after = request.Entries.Select(entry =>
             {
                 var line = lineByBillId[entry.UnitBillId];
-                return new { entry.UnitBillId, line.PreviousReading, line.CurrentReading, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource };
+                return new { entry.UnitBillId, line.PreviousReading, line.PreviousReadingDate, line.CurrentReading, line.CurrentReadingDate, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource };
             }).ToList();
             cycle.MarkDataChanged(actor.UserId);
             db.BillingAuditEntries.Add(new BillingAuditEntry(actor.OrganizationId, cycle.Id, actor.UserId, BillingAuditAction.Saved, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(after)));
@@ -1678,8 +1795,12 @@ public static class PrimeTectEndpointMapping
                 line.IsMetered,
                 line.RateSnapshot,
                 line.PreviousReading,
+                line.PreviousReadingDate,
                 line.CurrentReading,
+                line.CurrentReadingDate,
                 line.ConsumptionUnits,
+                line.WarningEnabled,
+                line.WarningThreshold,
                 line.Amount)).ToList());
 
     private static async Task<ComparisonSource> LoadComparisonSourceAsync(
@@ -1839,7 +1960,22 @@ public static class PrimeTectEndpointMapping
             bill.BlockingReason,
             bill.Total,
             bill.ElectricityWarning,
-            lines.Where(line => line.BillingUnitBillId == bill.Id).Select(line => new BillingChargeLineResponse(line.Id, line.ChargeType, line.ChargeNameSnapshot, line.SettingModeSnapshot, line.IsMetered, line.RateSnapshot, line.PreviousReading, line.CurrentReading, line.ConsumptionUnits, line.PreviousReadingSource, line.Amount)).ToList())).ToList();
+            lines.Where(line => line.BillingUnitBillId == bill.Id).Select(line => new BillingChargeLineResponse(
+                line.Id,
+                line.ChargeType,
+                line.ChargeNameSnapshot,
+                line.SettingModeSnapshot,
+                line.IsMetered,
+                line.RateSnapshot,
+                line.PreviousReading,
+                line.PreviousReadingDate,
+                line.CurrentReading,
+                line.CurrentReadingDate,
+                line.ConsumptionUnits,
+                line.PreviousReadingSource,
+                line.WarningEnabled,
+                line.WarningThreshold,
+                line.Amount)).ToList())).ToList();
         return new BillingCycleResponse(
             cycle.Id,
             cycle.PropertyId,
@@ -1876,7 +2012,20 @@ public static class PrimeTectEndpointMapping
             }
 
             var mode = unitSetting?.Mode == ChargeSettingMode.Custom ? ChargeSettingMode.Custom : selected.Mode;
-            result.Add(new EffectiveCharge(chargeType, ChargeName(chargeType, selected.CustomLabel), mode, selected.Amount.Value));
+            var warningSetting = unitSetting?.WarningMode switch
+            {
+                ChargeSettingMode.Disabled => null,
+                ChargeSettingMode.Custom => unitSetting,
+                ChargeSettingMode.Inherited => propertySetting,
+                _ => propertySetting,
+            };
+            var warningMode = chargeType == ChargeType.Electricity
+                ? warningSetting?.WarningMode ?? ChargeSettingMode.Custom
+                : ChargeSettingMode.Disabled;
+            var warningThreshold = warningMode == ChargeSettingMode.Custom
+                ? warningSetting?.WarningThreshold ?? 200m
+                : (decimal?)null;
+            result.Add(new EffectiveCharge(chargeType, ChargeName(chargeType, selected.CustomLabel), mode, selected.Amount.Value, warningMode, warningThreshold));
         }
 
         return result;
@@ -1914,7 +2063,13 @@ public static class PrimeTectEndpointMapping
         }
 
         var total = RoundMoney(lines.Sum(line => line.Amount));
-        bill.SetCalculation(total, electricity is not null && electricity.CurrentReading is not null && electricity.Amount < 200m);
+        bill.SetCalculation(
+            total,
+            electricity is not null
+            && electricity.CurrentReading is not null
+            && electricity.WarningEnabled
+            && electricity.WarningThreshold is not null
+            && electricity.Amount < electricity.WarningThreshold.Value);
         bill.SetBlockingReason(blockingReason);
     }
 
@@ -1930,7 +2085,13 @@ public static class PrimeTectEndpointMapping
 
     private sealed record ComparisonValues(decimal? Difference, decimal? PercentageChange, bool PercentageChangeAvailable);
 
-    private sealed record EffectiveCharge(ChargeType ChargeType, string ChargeName, ChargeSettingMode Mode, decimal Amount);
+    private sealed record EffectiveCharge(
+        ChargeType ChargeType,
+        string ChargeName,
+        ChargeSettingMode Mode,
+        decimal Amount,
+        ChargeSettingMode WarningMode,
+        decimal? WarningThreshold);
 
     private static IQueryable<Property> AccessibleProperties(PropertyManagementDbContext db, RequestUser actor, bool includeArchived) =>
         db.Properties.Where(property => property.OrganizationId == actor.OrganizationId
@@ -1980,7 +2141,7 @@ public static class PrimeTectEndpointMapping
     private static ApiUserResponse ToUserResponse(AppUser user) => new(user.Id, user.Email ?? string.Empty, user.FullName, user.Role, user.OrganizationId);
 
     private static ChargeConfigurationResponse ToChargeResponse(ChargeConfiguration configuration) =>
-        new(configuration.Id, configuration.UnitId, configuration.ChargeType, configuration.Mode, configuration.BillingMonth, configuration.Amount, configuration.CustomLabel);
+        new(configuration.Id, configuration.UnitId, configuration.ChargeType, configuration.Mode, configuration.BillingMonth, configuration.Amount, configuration.CustomLabel, configuration.WarningMode, configuration.WarningThreshold);
 
     private static string? ValidatePropertyDraft(PropertySetupRequest request)
     {
@@ -2062,6 +2223,25 @@ public static class PrimeTectEndpointMapping
             if (setting.ChargeType == ChargeType.Custom && setting.Mode == ChargeSettingMode.Custom && string.IsNullOrWhiteSpace(setting.CustomLabel))
             {
                 return "Custom charges require a label.";
+            }
+
+            if (setting.ChargeType == ChargeType.Electricity)
+            {
+                var warningMode = setting.WarningMode ?? (propertyDefaults ? ChargeSettingMode.Custom : ChargeSettingMode.Inherited);
+                if (propertyDefaults && warningMode == ChargeSettingMode.Inherited)
+                {
+                    return "Property electricity warning settings cannot inherit from a unit.";
+                }
+
+                if (warningMode is ChargeSettingMode.Inherited or ChargeSettingMode.Disabled && setting.WarningThreshold is not null)
+                {
+                    return "Inherited and disabled electricity warnings must not include a threshold.";
+                }
+
+                if (warningMode == ChargeSettingMode.Custom && setting.WarningThreshold is < 0)
+                {
+                    return "Electricity warning thresholds cannot be negative.";
+                }
             }
         }
 

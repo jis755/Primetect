@@ -230,6 +230,107 @@ public sealed class BillingWorkflowTests : IClassFixture<PrimeTectApiFactory>
         Assert.Equal(BillingCycleStatus.Approved, finallyApproved.Status);
     }
 
+    [Fact]
+    public async Task Configurable_electricity_rates_warnings_and_end_charge_preserve_approved_history()
+    {
+        using var admin = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        Assert.Equal(HttpStatusCode.OK, (await admin.PostAsJsonAsync("/api/auth/register-owner", new
+        {
+            organizationName = $"Rate Homes {suffix}",
+            fullName = "Rate Admin",
+            email = $"rate-admin-{suffix}@example.test",
+            password = "StrongPass!123",
+        })).StatusCode);
+
+        var property = await CreatePropertyAsync(admin, $"Rate Property {suffix}", new[] { "A-1", "B-1" });
+        var tenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = "Rate Tenant", phone = (string?)null }));
+        foreach (var unit in property.Floors.Single().Units)
+        {
+            Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unit.Id}/occupancy", new
+            {
+                tenantId = tenant.Id,
+                startDate = "2025-12-01",
+                endDate = (string?)null,
+            })).StatusCode);
+        }
+
+        await SavePropertyChargesAsync(admin, property.Id, new[]
+        {
+            new
+            {
+                chargeType = "Electricity",
+                mode = "Custom",
+                billingMonth = "2026-02-01",
+                amount = (decimal?)10m,
+                customLabel = (string?)null,
+                warningMode = "Custom",
+                warningThreshold = (decimal?)200m,
+            },
+        });
+        await SaveUnitChargesAsync(admin, property.Id, property.Floors.Single().Units[1].Id, new[]
+        {
+            new
+            {
+                chargeType = "Electricity",
+                mode = "Custom",
+                billingMonth = "2026-02-01",
+                amount = (decimal?)12m,
+                customLabel = (string?)null,
+                warningMode = "Custom",
+                warningThreshold = (decimal?)300m,
+            },
+        });
+
+        var draft = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-02-01" }));
+        Assert.Equal(2, draft.Bills.Count);
+        Assert.All(draft.Bills, bill => Assert.Equal(MeterReadingSource.Missing, bill.Charges.Single().PreviousReadingSource));
+
+        var saved = await ReadAsync<BillingCycleResponse>(await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/meter-readings", new
+        {
+            expectedVersion = draft.Version,
+            reason = "Documented January opening readings",
+            entries = draft.Bills.Select(bill => new
+            {
+                unitBillId = bill.Id,
+                previousReading = (decimal?)10020m,
+                currentReading = (decimal?)10040m,
+                previousReadingDate = "2026-01-01",
+                currentReadingDate = "2026-02-01",
+            }),
+        }));
+        var firstBill = saved.Bills.Single(bill => bill.UnitName == "A-1");
+        var customBill = saved.Bills.Single(bill => bill.UnitName == "B-1");
+        Assert.Equal(200m, firstBill.Charges.Single().Amount);
+        Assert.False(firstBill.ElectricityWarning);
+        Assert.Equal(240m, customBill.Charges.Single().Amount);
+        Assert.True(customBill.ElectricityWarning);
+        Assert.Equal(new DateOnly(2026, 2, 1), firstBill.Charges.Single().CurrentReadingDate);
+
+        var submitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/submit", new { expectedVersion = saved.Version }));
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"rate-manager-{suffix}@example.test", role = "Manager" }));
+        using var manager = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.OK, (await manager.PostAsJsonAsync("/api/auth/accept-invitation", new
+        {
+            token = invitation.InvitationToken,
+            fullName = "Rate Manager",
+            password = "StrongPass!123",
+        })).StatusCode);
+        var approved = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/approve", new { expectedVersion = submitted.Version }));
+        Assert.Equal(BillingCycleStatus.Approved, approved.Status);
+
+        var ended = await admin.PostAsJsonAsync($"/api/properties/{property.Id}/charges/Electricity/end", new { billingMonth = "2026-03-01" });
+        Assert.Equal(HttpStatusCode.OK, ended.StatusCode);
+        var chargeHistory = await ReadAsync<List<ChargeConfigurationResponse>>(ended);
+        Assert.Contains(chargeHistory, setting => setting.BillingMonth == new DateOnly(2026, 2, 1) && setting.Mode == ChargeSettingMode.Custom && setting.Amount == 10m);
+        Assert.Contains(chargeHistory, setting => setting.BillingMonth == new DateOnly(2026, 3, 1) && setting.Mode == ChargeSettingMode.Disabled);
+
+        var historical = await ReadAsync<BillingCycleResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-cycles/2026-02"));
+        Assert.Equal(10m, historical.Bills.Single(bill => bill.UnitName == "A-1").Charges.Single().Rate);
+        Assert.Equal(200m, historical.Bills.Single(bill => bill.UnitName == "A-1").Charges.Single().WarningThreshold);
+        Assert.Equal(12m, historical.Bills.Single(bill => bill.UnitName == "B-1").Charges.Single().Rate);
+    }
+
     private async Task<PropertyResponse> CreatePropertyAsync(HttpClient client, string name, IReadOnlyList<string> unitNames)
     {
         var response = await client.PostAsJsonAsync("/api/properties", new
@@ -274,7 +375,9 @@ public sealed class BillingWorkflowTests : IClassFixture<PrimeTectApiFactory>
 
     private sealed record BillingUnitBillResponse(Guid Id, Guid UnitId, string UnitName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, DateOnly? OccupancyStartDate, DateOnly? OccupancyEndDate, string? BlockingReason, decimal Total, bool ElectricityWarning, List<BillingChargeLineResponse> Charges);
 
-    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, decimal? CurrentReading, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, decimal Amount);
+    private sealed record ChargeConfigurationResponse(Guid Id, Guid? UnitId, ChargeType ChargeType, ChargeSettingMode Mode, DateOnly BillingMonth, decimal? Amount, string? CustomLabel, ChargeSettingMode WarningMode, decimal? WarningThreshold);
+
+    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, bool WarningEnabled, decimal? WarningThreshold, decimal Amount);
 
     private sealed record BillingAuditResponse(Guid Id, Guid ActorUserId, BillingAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
 }

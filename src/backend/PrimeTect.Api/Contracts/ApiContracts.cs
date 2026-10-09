@@ -30,13 +30,27 @@ public sealed record OccupancyAssignmentRequest(Guid TenantId, DateOnly StartDat
 
 public sealed record CloseOccupancyRequest(DateOnly EndDate);
 
-public sealed record ChargeSettingRequest(ChargeType ChargeType, ChargeSettingMode Mode, DateOnly BillingMonth, decimal? Amount, string? CustomLabel);
+public sealed record ChargeSettingRequest(
+    ChargeType ChargeType,
+    ChargeSettingMode Mode,
+    DateOnly BillingMonth,
+    decimal? Amount,
+    string? CustomLabel,
+    ChargeSettingMode? WarningMode = null,
+    decimal? WarningThreshold = null);
 
 public sealed record ChargeSettingsRequest(IReadOnlyList<ChargeSettingRequest> Items);
 
 public sealed record BillingMonthRequest(DateOnly BillingMonth);
 
-public sealed record MeterReadingEntryRequest(Guid UnitBillId, decimal? PreviousReading, decimal? CurrentReading);
+public sealed record MeterReadingEntryRequest(
+    Guid UnitBillId,
+    decimal? PreviousReading,
+    decimal? CurrentReading,
+    DateOnly? PreviousReadingDate = null,
+    DateOnly? CurrentReadingDate = null);
+
+public sealed record EndChargeRequest(DateOnly BillingMonth);
 
 public sealed record BillingReadingsRequest(long ExpectedVersion, IReadOnlyList<MeterReadingEntryRequest> Entries, string? Reason);
 
@@ -52,7 +66,16 @@ public sealed record PropertyResponse(Guid Id, string Name, string Address, Prop
 
 public sealed record TenantResponse(Guid Id, string? Name, string? Phone, OnboardingStatus OnboardingStatus);
 
-public sealed record ChargeConfigurationResponse(Guid Id, Guid? UnitId, ChargeType ChargeType, ChargeSettingMode Mode, DateOnly BillingMonth, decimal? Amount, string? CustomLabel);
+public sealed record ChargeConfigurationResponse(
+    Guid Id,
+    Guid? UnitId,
+    ChargeType ChargeType,
+    ChargeSettingMode Mode,
+    DateOnly BillingMonth,
+    decimal? Amount,
+    string? CustomLabel,
+    ChargeSettingMode WarningMode,
+    decimal? WarningThreshold);
 
 public sealed record BillingChargeLineResponse(
     Guid Id,
@@ -62,9 +85,13 @@ public sealed record BillingChargeLineResponse(
     bool IsMetered,
     decimal? Rate,
     decimal? PreviousReading,
+    DateOnly? PreviousReadingDate,
     decimal? CurrentReading,
+    DateOnly? CurrentReadingDate,
     decimal? ConsumptionUnits,
     MeterReadingSource PreviousReadingSource,
+    bool WarningEnabled,
+    decimal? WarningThreshold,
     decimal Amount);
 
 public sealed record BillingUnitBillResponse(
@@ -114,8 +141,12 @@ public sealed record BillingStatementChargeResponse(
     bool IsMetered,
     decimal? Rate,
     decimal? PreviousReading,
+    DateOnly? PreviousReadingDate,
     decimal? CurrentReading,
+    DateOnly? CurrentReadingDate,
     decimal? ConsumptionUnits,
+    bool WarningEnabled,
+    decimal? WarningThreshold,
     decimal Amount);
 
 public sealed record BillingStatementUnitResponse(
