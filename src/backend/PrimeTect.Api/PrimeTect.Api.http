@@ -1,0 +1,4 @@
+@PrimeTect_Api_HostAddress = http://localhost:5000
+
+GET {{PrimeTect_Api_HostAddress}}/api/health
+Accept: application/json

@@ -1,0 +1,48 @@
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+appsettings.*.Local.json
+appsettings.Development.json
+src/backend/PrimeTect.Api/appsettings.json
+src/backend/PrimeTect.Api/Properties/launchSettings.json
+*.secret.json
+
+# .NET build output
+bin/
+obj/
+[Bb]uild/
+[Dd]ebug/
+[Rr]elease/
+TestResults/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# IDE / OS
+.vs/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs and local database files
+*.log
+*.db
+*.sqlite
+*.sqlite3
