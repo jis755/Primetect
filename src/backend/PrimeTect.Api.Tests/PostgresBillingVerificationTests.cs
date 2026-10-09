@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -25,8 +27,8 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 {
     private const string AdminConnectionVariable = "PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION";
     private readonly string databaseName = $"primetect_verification_{Guid.NewGuid():N}";
+    private readonly HashSet<string> createdDatabaseNames = [];
     private string? adminConnectionString;
-    private bool created;
 
     public string? Blocker { get; private set; }
 
@@ -78,7 +80,7 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
                 await create.ExecuteNonQueryAsync();
             }
 
-            created = true;
+            createdDatabaseNames.Add(databaseName);
             await using var context = new PropertyManagementDbContext(
                 new DbContextOptionsBuilder<PropertyManagementDbContext>()
                     .UseNpgsql(ConnectionString)
@@ -87,9 +89,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 3 || pending.Any())
+            if (applied.Count() != 4 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected three applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected four applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)
@@ -106,10 +108,37 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
             throw new InvalidOperationException(Blocker);
         }
 
-        EnsureGeneratedDatabaseTarget(ConnectionString);
+        EnsureGeneratedDatabaseTarget(ConnectionString, databaseName);
         var connection = new NpgsqlConnection(ConnectionString);
         await connection.OpenAsync();
         return connection;
+    }
+
+    public async Task<string> CreateAdditionalDatabaseAsync()
+    {
+        if (!IsAvailable || string.IsNullOrWhiteSpace(adminConnectionString))
+        {
+            throw new InvalidOperationException(Blocker ?? "The PostgreSQL verification database is unavailable.");
+        }
+
+        var additionalName = $"primetect_verification_{Guid.NewGuid():N}";
+        var connectionString = BuildConnectionString(additionalName);
+        await using var admin = new NpgsqlConnection(adminConnectionString);
+        await admin.OpenAsync();
+
+        await using (var exists = new NpgsqlCommand("SELECT 1 FROM pg_database WHERE datname = @name", admin))
+        {
+            exists.Parameters.AddWithValue("name", additionalName);
+            Assert.Null(await exists.ExecuteScalarAsync());
+        }
+
+        await using (var create = new NpgsqlCommand($"CREATE DATABASE {QuoteIdentifier(additionalName)}", admin))
+        {
+            await create.ExecuteNonQueryAsync();
+        }
+
+        createdDatabaseNames.Add(additionalName);
+        return connectionString;
     }
 
     public Task DisposeAsync() => DropCreatedDatabaseAsync();
@@ -121,14 +150,14 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
             Database = database,
             Pooling = false,
         };
-        EnsureGeneratedDatabaseTarget(builder.ConnectionString);
+        EnsureGeneratedDatabaseTarget(builder.ConnectionString, database);
         return builder.ConnectionString;
     }
 
-    private void EnsureGeneratedDatabaseTarget(string connectionString)
+    private void EnsureGeneratedDatabaseTarget(string connectionString, string expectedDatabaseName)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(builder.Database, databaseName, StringComparison.Ordinal) || !IsSafeGeneratedName(builder.Database ?? string.Empty))
+        if (!string.Equals(builder.Database, expectedDatabaseName, StringComparison.Ordinal) || !IsSafeGeneratedName(builder.Database ?? string.Empty))
         {
             throw new InvalidOperationException("The effective PostgreSQL verification connection must target only the generated disposable database.");
         }
@@ -136,23 +165,32 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
     private async Task DropCreatedDatabaseAsync()
     {
-        if (!created || string.IsNullOrWhiteSpace(adminConnectionString) || !IsSafeGeneratedName(databaseName))
+        if (createdDatabaseNames.Count == 0 || string.IsNullOrWhiteSpace(adminConnectionString))
         {
             return;
         }
 
-        try
+        foreach (var name in createdDatabaseNames.ToArray())
         {
-            await using var admin = new NpgsqlConnection(adminConnectionString);
-            await admin.OpenAsync();
-            await using var drop = new NpgsqlCommand($"DROP DATABASE {QuoteIdentifier(databaseName)} WITH (FORCE)", admin);
-            await drop.ExecuteNonQueryAsync();
-            created = false;
+            if (!IsSafeGeneratedName(name))
+            {
+                continue;
+            }
+
+            try
+            {
+                await using var admin = new NpgsqlConnection(adminConnectionString);
+                await admin.OpenAsync();
+                await using var drop = new NpgsqlCommand($"DROP DATABASE {QuoteIdentifier(name)} WITH (FORCE)", admin);
+                await drop.ExecuteNonQueryAsync();
+                createdDatabaseNames.Remove(name);
+            }
+            catch
+            {
+                // Do not attempt a broader cleanup target. The blocker is reported by the test run.
+            }
         }
-        catch
-        {
-            // Do not attempt a broader cleanup target. The blocker is reported by the test run.
-        }
+
     }
 
     private static bool IsSafeLocalAdminTarget(NpgsqlConnectionStringBuilder builder)
@@ -254,13 +292,250 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(3L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(4L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "ConsumptionUnits"));
         Assert.Equal((18, 2), await NumericDefinitionAsync(connection, "billing_charge_lines", "Amount"));
         Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'billing_cycles' AND indexname = 'IX_billing_cycles_OrganizationId_PropertyId_BillingMonth' AND indexdef LIKE '%UNIQUE%'"));
+    }
+
+    [PostgresFact]
+    public async Task PostgreSQL_upgrades_preceding_schema_and_backfills_legacy_warning_defaults()
+    {
+        RequirePostgres();
+
+        var legacyConnectionString = await database.CreateAdditionalDatabaseAsync();
+        var options = new DbContextOptionsBuilder<PropertyManagementDbContext>()
+            .UseNpgsql(legacyConnectionString)
+            .Options;
+        await using var context = new PropertyManagementDbContext(options);
+        var migrator = context.Database.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261009101949_PrintableBillingReports");
+
+        var organizationId = Guid.NewGuid();
+        var propertyId = Guid.NewGuid();
+        var floorId = Guid.NewGuid();
+        var unitId = Guid.NewGuid();
+        var cycleId = Guid.NewGuid();
+        var billId = Guid.NewGuid();
+        var lineId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+
+        await using (var connection = new NpgsqlConnection(legacyConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand("""
+                INSERT INTO "organizations" ("Id", "Name", "CreatedAtUtc")
+                VALUES (@organization, 'Legacy Organization', @now);
+                INSERT INTO "properties" ("Id", "OrganizationId", "Name", "Address", "PropertyType", "IsArchived", "CreatedAtUtc")
+                VALUES (@property, @organization, 'Legacy Property', 'Legacy Address', 'ApartmentBuilding', FALSE, @now);
+                INSERT INTO "floors" ("Id", "OrganizationId", "PropertyId", "Name", "SortOrder", "IsArchived")
+                VALUES (@floor, @organization, @property, 'Ground', 0, FALSE);
+                INSERT INTO "units" ("Id", "OrganizationId", "PropertyId", "FloorId", "Name", "IsEnabled", "IsArchived", "OccupancyStatus")
+                VALUES (@unit, @organization, @property, @floor, 'G-1', TRUE, FALSE, 'Vacant');
+                INSERT INTO "charge_configurations" ("Id", "OrganizationId", "PropertyId", "UnitId", "ChargeType", "Mode", "BillingMonth", "Amount", "CustomLabel")
+                VALUES (@configuration, @organization, @property, NULL, 'Electricity', 'Custom', DATE '2026-01-01', 19.9000, NULL);
+                INSERT INTO "billing_cycles" ("Id", "OrganizationId", "PropertyId", "BillingMonth", "Status", "Version", "LastChangedByUserId", "LastChangedAtUtc", "SubmittedByUserId", "SubmittedAtUtc", "ReturnedByUserId", "ReturnedAtUtc", "ReturnReason", "ApprovedByUserId", "ApprovedAtUtc", "ApprovedTotal")
+                VALUES (@cycle, @organization, @property, DATE '2026-01-01', 'Approved', 2, @actor, @now, @actor, @now, NULL, NULL, NULL, @actor, @now, 199.00);
+                INSERT INTO "billing_unit_bills" ("Id", "OrganizationId", "BillingCycleId", "UnitId", "UnitNameSnapshot", "OccupancyAssignmentId", "TenantId", "TenantNameSnapshot", "TenantPhoneSnapshot", "OccupancyStartDate", "OccupancyEndDate", "BlockingReason", "Total", "ElectricityWarning", "FloorNameSnapshot")
+                VALUES (@bill, @organization, @cycle, @unit, 'G-1', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 199.00, TRUE, 'Ground');
+                INSERT INTO "billing_charge_lines" ("Id", "OrganizationId", "BillingUnitBillId", "ChargeType", "ChargeNameSnapshot", "SettingModeSnapshot", "IsMetered", "RateSnapshot", "PreviousReading", "CurrentReading", "ConsumptionUnits", "PreviousReadingSource", "Amount")
+                VALUES (@line, @organization, @bill, 'Electricity', 'Electricity', 'Custom', TRUE, 19.9000, 100.0000, 110.0000, 10.0000, 'Missing', 199.00);
+                """, connection);
+            command.Parameters.AddWithValue("organization", organizationId);
+            command.Parameters.AddWithValue("property", propertyId);
+            command.Parameters.AddWithValue("floor", floorId);
+            command.Parameters.AddWithValue("unit", unitId);
+            command.Parameters.AddWithValue("configuration", Guid.NewGuid());
+            command.Parameters.AddWithValue("cycle", cycleId);
+            command.Parameters.AddWithValue("bill", billId);
+            command.Parameters.AddWithValue("line", lineId);
+            command.Parameters.AddWithValue("actor", actorId);
+            command.Parameters.AddWithValue("now", DateTimeOffset.UtcNow);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await migrator.MigrateAsync();
+
+        await using (var connection = new NpgsqlConnection(legacyConnectionString))
+        {
+            await connection.OpenAsync();
+            await using (var configuration = new NpgsqlCommand("SELECT \"WarningMode\", \"WarningThreshold\" FROM \"charge_configurations\" WHERE \"PropertyId\" = @property", connection))
+            {
+                configuration.Parameters.AddWithValue("property", propertyId);
+                await using var reader = await configuration.ExecuteReaderAsync(CommandBehavior.SingleRow);
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal("Custom", reader.GetString(0));
+                Assert.Equal(200m, reader.GetDecimal(1));
+            }
+
+            await using (var line = new NpgsqlCommand("SELECT \"RateSnapshot\", \"PreviousReading\", \"CurrentReading\", \"WarningEnabled\", \"WarningThreshold\", \"PreviousReadingDate\", \"CurrentReadingDate\" FROM \"billing_charge_lines\" WHERE \"Id\" = @line", connection))
+            {
+                line.Parameters.AddWithValue("line", lineId);
+                await using var reader = await line.ExecuteReaderAsync(CommandBehavior.SingleRow);
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal(19.9000m, reader.GetDecimal(0));
+                Assert.Equal(100.0000m, reader.GetDecimal(1));
+                Assert.Equal(110.0000m, reader.GetDecimal(2));
+                Assert.True(reader.GetBoolean(3));
+                Assert.Equal(200m, reader.GetDecimal(4));
+                Assert.True(await reader.IsDBNullAsync(5));
+                Assert.True(await reader.IsDBNullAsync(6));
+            }
+
+            await using var bill = new NpgsqlCommand("SELECT \"Total\", \"ElectricityWarning\" FROM \"billing_unit_bills\" WHERE \"Id\" = @bill", connection);
+            bill.Parameters.AddWithValue("bill", billId);
+            await using var billReader = await bill.ExecuteReaderAsync(CommandBehavior.SingleRow);
+            Assert.True(await billReader.ReadAsync());
+            Assert.Equal(199.00m, billReader.GetDecimal(0));
+            Assert.True(billReader.GetBoolean(1));
+        }
+    }
+
+    [PostgresFact]
+    public async Task PostgreSQL_persists_rate_warning_modes_reading_dates_and_approved_snapshots()
+    {
+        RequirePostgres();
+
+        using var api = new PostgresPrimeTectApiFactory(database.ConnectionString);
+        using var admin = api.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        await RegisterAsync(admin, $"settings-{suffix}@example.test", "Settings Admin");
+
+        var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Settings Property {suffix}",
+            address = "7 Verification Street",
+            propertyType = "ApartmentBuilding",
+            floors = new[] { new { name = "Ground", unitCount = 3, unitNames = new[] { "R-1", "R-2", "R-3" } } },
+        }));
+        var tenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null }));
+        foreach (var unit in property.Floors.Single().Units)
+        {
+            Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unit.Id}/occupancy", new
+            {
+                tenantId = tenant.Id,
+                startDate = "2026-01-01",
+                endDate = (string?)null,
+            })).StatusCode);
+        }
+
+        await PutChargesAsync(admin, property.Id, new[]
+        {
+            new
+            {
+                chargeType = "Electricity",
+                mode = "Custom",
+                billingMonth = "2026-02-01",
+                amount = (decimal?)10m,
+                customLabel = (string?)null,
+                warningMode = "Custom",
+                warningThreshold = (decimal?)200m,
+            },
+        });
+        await PutUnitChargesAsync(admin, property.Id, property.Floors.Single().Units[1].Id, new[]
+        {
+            new
+            {
+                chargeType = "Electricity",
+                mode = "Custom",
+                billingMonth = "2026-02-01",
+                amount = (decimal?)12m,
+                customLabel = (string?)null,
+                warningMode = "Custom",
+                warningThreshold = (decimal?)300m,
+            },
+        });
+        await PutUnitChargesAsync(admin, property.Id, property.Floors.Single().Units[2].Id, new[]
+        {
+            new
+            {
+                chargeType = "Electricity",
+                mode = "Inherited",
+                billingMonth = "2026-02-01",
+                amount = (decimal?)null,
+                customLabel = (string?)null,
+                warningMode = "Disabled",
+                warningThreshold = (decimal?)null,
+            },
+        });
+
+        var draft = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-02-01" }));
+        var firstDraft = draft.Bills.Single(bill => bill.UnitName == "R-1").Charges.Single();
+        var customDraft = draft.Bills.Single(bill => bill.UnitName == "R-2").Charges.Single();
+        var disabledDraft = draft.Bills.Single(bill => bill.UnitName == "R-3").Charges.Single();
+        Assert.Equal(10m, firstDraft.Rate);
+        Assert.Equal(200m, firstDraft.WarningThreshold);
+        Assert.True(firstDraft.WarningEnabled);
+        Assert.Equal(12m, customDraft.Rate);
+        Assert.Equal(300m, customDraft.WarningThreshold);
+        Assert.True(customDraft.WarningEnabled);
+        Assert.Equal(ChargeSettingMode.Custom, disabledDraft.SettingMode);
+        Assert.Equal(10m, disabledDraft.Rate);
+        Assert.False(disabledDraft.WarningEnabled);
+        Assert.Null(disabledDraft.WarningThreshold);
+
+        var saved = await ReadAsync<BillingCycleResponse>(await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/meter-readings", new
+        {
+            expectedVersion = draft.Version,
+            reason = "Opening readings and dates entered from the documented meter sheet",
+            entries = draft.Bills.Select(bill => new
+            {
+                unitBillId = bill.Id,
+                previousReading = (decimal?)10020m,
+                currentReading = (decimal?)10040m,
+                previousReadingDate = "2026-01-01",
+                currentReadingDate = "2026-02-01",
+            }),
+        }));
+        var firstSaved = saved.Bills.Single(bill => bill.UnitName == "R-1").Charges.Single();
+        var customSaved = saved.Bills.Single(bill => bill.UnitName == "R-2").Charges.Single();
+        var disabledSaved = saved.Bills.Single(bill => bill.UnitName == "R-3").Charges.Single();
+        Assert.Equal(200m, firstSaved.Amount);
+        Assert.False(firstSaved.WarningEnabled && firstSaved.WarningThreshold is not null && firstSaved.Amount < firstSaved.WarningThreshold.Value);
+        Assert.Equal(240m, customSaved.Amount);
+        Assert.True(customSaved.WarningEnabled && customSaved.WarningThreshold is not null && customSaved.Amount < customSaved.WarningThreshold.Value);
+        Assert.Equal(new DateOnly(2026, 1, 1), firstSaved.PreviousReadingDate);
+        Assert.Equal(new DateOnly(2026, 2, 1), firstSaved.CurrentReadingDate);
+        Assert.Equal(200m, disabledSaved.Amount);
+        Assert.False(disabledSaved.WarningEnabled);
+
+        var submitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/submit", new { expectedVersion = saved.Version }));
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"settings-manager-{suffix}@example.test", role = "Manager" }));
+        using var manager = api.CreateClient();
+        await AcceptInvitationAsync(manager, invitation.InvitationToken, "Settings Manager");
+        var approved = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/approve", new { expectedVersion = submitted.Version }));
+        Assert.Equal(BillingCycleStatus.Approved, approved.Status);
+
+        await PutChargesAsync(admin, property.Id, new[]
+        {
+            new
+            {
+                chargeType = "Electricity",
+                mode = "Custom",
+                billingMonth = "2026-03-01",
+                amount = (decimal?)99m,
+                customLabel = (string?)null,
+                warningMode = "Custom",
+                warningThreshold = (decimal?)999m,
+            },
+        });
+        var historical = await ReadAsync<BillingCycleResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-cycles/2026-02"));
+        Assert.Equal(10m, historical.Bills.Single(bill => bill.UnitName == "R-1").Charges.Single().Rate);
+        Assert.Equal(200m, historical.Bills.Single(bill => bill.UnitName == "R-1").Charges.Single().WarningThreshold);
+        Assert.Equal(12m, historical.Bills.Single(bill => bill.UnitName == "R-2").Charges.Single().Rate);
+        Assert.Equal(300m, historical.Bills.Single(bill => bill.UnitName == "R-2").Charges.Single().WarningThreshold);
+        Assert.False(historical.Bills.Single(bill => bill.UnitName == "R-3").Charges.Single().WarningEnabled);
+
+        var next = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-03-01" }));
+        var carried = next.Bills.Single(bill => bill.UnitName == "R-1").Charges.Single();
+        Assert.Equal(MeterReadingSource.ApprovedPeriod, carried.PreviousReadingSource);
+        Assert.Equal(10040m, carried.PreviousReading);
+        Assert.Equal(new DateOnly(2026, 2, 1), carried.PreviousReadingDate);
+        Assert.Equal(99m, carried.Rate);
+        Assert.Equal(999m, carried.WarningThreshold);
     }
 
     [PostgresFact]
@@ -580,6 +855,11 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync($"/api/properties/{propertyId}/charges", new { items })).StatusCode);
     }
 
+    private static async Task PutUnitChargesAsync(HttpClient client, Guid propertyId, Guid unitId, object[] items)
+    {
+        Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync($"/api/properties/{propertyId}/units/{unitId}/charges", new { items })).StatusCode);
+    }
+
     private static async Task<T> ReadAsync<T>(HttpResponseMessage response)
     {
         response.EnsureSuccessStatusCode();
@@ -634,7 +914,7 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
 
     private sealed record BillingUnitBillResponse(Guid Id, Guid UnitId, string UnitName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, DateOnly? OccupancyStartDate, DateOnly? OccupancyEndDate, string? BlockingReason, decimal Total, bool ElectricityWarning, List<BillingChargeLineResponse> Charges);
 
-    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, decimal? CurrentReading, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, decimal Amount);
+    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, bool WarningEnabled, decimal? WarningThreshold, decimal Amount);
 
     private sealed record BillingAuditResponse(Guid Id, Guid ActorUserId, BillingAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
 

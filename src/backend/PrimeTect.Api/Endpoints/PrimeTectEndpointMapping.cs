@@ -2020,7 +2020,13 @@ public static class PrimeTectEndpointMapping
                 _ => propertySetting,
             };
             var warningMode = chargeType == ChargeType.Electricity
-                ? warningSetting?.WarningMode ?? ChargeSettingMode.Custom
+                ? unitSetting?.WarningMode switch
+                {
+                    ChargeSettingMode.Disabled => ChargeSettingMode.Disabled,
+                    ChargeSettingMode.Custom => ChargeSettingMode.Custom,
+                    ChargeSettingMode.Inherited => propertySetting?.WarningMode ?? ChargeSettingMode.Custom,
+                    _ => propertySetting?.WarningMode ?? ChargeSettingMode.Custom,
+                }
                 : ChargeSettingMode.Disabled;
             var warningThreshold = warningMode == ChargeSettingMode.Custom
                 ? warningSetting?.WarningThreshold ?? 200m
