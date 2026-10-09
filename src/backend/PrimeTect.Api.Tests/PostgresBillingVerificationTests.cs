@@ -292,7 +292,7 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(5L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(7L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));

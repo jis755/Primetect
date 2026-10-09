@@ -60,6 +60,7 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         var property = await ReadAsync<PropertyResponse>(propertyResponse);
         Assert.Equal(6, property.Floors.Count);
         Assert.Equal(new[] { 2, 2, 2, 1, 1, 1 }, property.Floors.Select(floor => floor.Units.Count).ToArray());
+        Assert.Equal("Asia/Dhaka", property.TimeZoneId);
 
         var previewResponse = await ownerA.PostAsJsonAsync("/api/properties/preview", new
         {
@@ -123,6 +124,7 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
             address = "3 Prime Street",
             propertyType = "Shop",
             isArchived = false,
+            timeZoneId = "America/New_York",
         });
         Assert.Equal(HttpStatusCode.OK, propertyUpdate.StatusCode);
 
@@ -137,6 +139,7 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         Assert.Equal(HttpStatusCode.OK, floorUpdate.StatusCode);
         var editedProperty = await ReadAsync<PropertyResponse>(floorUpdate);
         Assert.Equal("Workflow Building Updated", editedProperty.Name);
+        Assert.Equal("America/New_York", editedProperty.TimeZoneId);
         Assert.Equal(new[] { "Shop A", "Shop B", "Shop C" }, editedProperty.Floors.Single().Units.Select(unit => unit.Name).ToArray());
 
         var invitationResponse = await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "staff-workflow@example.test", role = "BuildingStaff" });
@@ -313,7 +316,7 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         return (await response.Content.ReadFromJsonAsync<T>(JsonOptions))!;
     }
 
-    private sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, List<FloorResponse> Floors);
+    private sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, List<FloorResponse> Floors, string TimeZoneId);
 
     private sealed record FloorResponse(Guid Id, string Name, int SortOrder, bool IsArchived, List<UnitResponse> Units);
 
