@@ -170,6 +170,8 @@ public sealed class PostgresPrimeTectApiFactory(string connectionString) : WebAp
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+        builder.UseSetting("Database:Provider", "PostgreSQL");
+        builder.UseSetting("ConnectionStrings:PrimeTectDatabase", connectionString);
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Database:Provider"] = "PostgreSQL",
@@ -293,7 +295,7 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal(HttpStatusCode.Conflict, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-01-01" })).StatusCode);
         await AssertDatabaseRejectsDuplicateCycleAsync(property.Id, adminEmail);
         Assert.Null(first.Bills.Single(bill => bill.UnitName == "G-1").TenantName);
-        Assert.Equal(2, first.Bills.Count);
+        Assert.Equal(3, first.Bills.Count);
         Assert.Contains("immediately preceding approved period", first.Bills.Single(bill => bill.UnitName == "G-1").BlockingReason);
 
         var electricity = first.Bills.Single(bill => bill.UnitName == "G-1").Charges.Single(charge => charge.ChargeType == ChargeType.Electricity);
@@ -362,12 +364,12 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{meterProperty.Id}/units/{meterUnit.Id}/occupancy", new { tenantId = meterTenant.Id, startDate = "2026-01-01", endDate = (string?)null })).StatusCode);
         await PutChargesAsync(admin, meterProperty.Id, new[] { new { chargeType = "Electricity", mode = "Custom", billingMonth = "2026-01-01", amount = (decimal?)19.9000m, customLabel = (string?)null } });
         var meterJanuary = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{meterProperty.Id}/billing-cycles", new { billingMonth = "2026-01-01" }));
-        var meterJanuaryCharge = meterJanuary.Bills.Single().Charges.Single();
+        var meterJanuaryBill = meterJanuary.Bills.Single();
         var meterJanuarySaved = await ReadAsync<BillingCycleResponse>(await manager.PutAsJsonAsync($"/api/properties/{meterProperty.Id}/billing-cycles/{meterJanuary.Id}/meter-readings", new
         {
             expectedVersion = meterJanuary.Version,
             reason = "Opening reading entered from the documented meter sheet",
-            entries = new[] { new { unitBillId = meterJanuaryCharge.Id, previousReading = 100.1234m, currentReading = 110.1234m } },
+            entries = new[] { new { unitBillId = meterJanuaryBill.Id, previousReading = 100.1234m, currentReading = 110.1234m } },
         }));
         var meterJanuarySubmitted = await ReadAsync<BillingCycleResponse>(await manager.PostAsJsonAsync($"/api/properties/{meterProperty.Id}/billing-cycles/{meterJanuary.Id}/submit", new { expectedVersion = meterJanuarySaved.Version }));
         var meterJanuaryApproved = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{meterProperty.Id}/billing-cycles/{meterJanuary.Id}/approve", new { expectedVersion = meterJanuarySubmitted.Version }));
