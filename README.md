@@ -41,6 +41,8 @@ src/
    Copy-Item src/backend/PrimeTect.Api/appsettings.example.json src/backend/PrimeTect.Api/appsettings.Development.json
    ```
 
+   `appsettings.json` and `Properties/launchSettings.json` are intentionally local-only and ignored. A fresh clone does not need either file committed: use the sanitized example above and pass the API URL explicitly when running locally.
+
 3. Inspect and apply the PrimeTect migration only after confirming the connection string targets the dedicated `primetect` database:
 
    ```powershell
@@ -55,10 +57,10 @@ src/
    docker compose -f docker-compose.example.yml up -d postgres
    ```
 
-6. Start the API from `src/backend`:
+6. Start the API from the repository root with the same origin used by the frontend:
 
    ```powershell
-   dotnet run --project PrimeTect.Api
+   dotnet run --project src/backend/PrimeTect.Api --urls http://localhost:5000
    ```
 
    The API health endpoint is available at `http://localhost:5000/api/health`.
@@ -90,9 +92,13 @@ The API tests use a unique in-memory database and do not touch PostgreSQL. The f
 - Identity-backed HttpOnly cookie authentication supports login/logout, Admin invitations, Manager and Building Staff account acceptance, organization isolation, and assigned-property staff access.
 - Apartment buildings, individual-room buildings, and shops support configurable floors and units, generated previews, unequal floor layouts, unit enable/archive state, and explicit occupancy status.
 - Tenant records allow independently optional name and phone fields, multiple unit assignments, dated history, overlap prevention, and `Not connected` onboarding status.
-- Property defaults and unit-level charge settings support explicit inheritance/custom modes and decimal effective billing months. There is no billing calculation engine yet.
+- The frontend supports property and floor editing, occupancy history with move-in/move-out closure, property charge defaults, unit-level inherited/custom/disabled charge modes, decimal amounts, and effective billing months.
+- Staff invitations are accepted through a secure one-time token form with expiry and reuse protection. Invitation tokens are shared manually because email delivery is not connected.
+- Property setup and maintenance actions remain scoped by organization and role; Building Staff see only assigned properties while Admin and Manager manage structure and charges.
 
 Email delivery, email verification, two-factor authentication, billing calculations, and deployment are not implemented in this milestone. Invitation creation returns a one-time token for local setup because email delivery is not connected.
+
+The initial EF Core migration is committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Its applied status must be verified separately against the local `primetect` database before manual use.
 
 ## npm audit review
 

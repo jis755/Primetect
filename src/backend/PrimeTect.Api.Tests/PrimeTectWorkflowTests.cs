@@ -84,6 +84,14 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         Assert.Equal(HttpStatusCode.OK, registrationB.StatusCode);
         var crossOrganization = await ownerB.GetAsync($"/api/properties/{property.Id}");
         Assert.Equal(HttpStatusCode.NotFound, crossOrganization.StatusCode);
+        var crossOrganizationUpdate = await ownerB.PutAsJsonAsync($"/api/properties/{property.Id}", new
+        {
+            name = "Should Stay Private",
+            address = "No Access",
+            propertyType = "Shop",
+            isArchived = false,
+        });
+        Assert.Equal(HttpStatusCode.NotFound, crossOrganizationUpdate.StatusCode);
     }
 
     [Fact]
@@ -109,6 +117,28 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         var unitA = property.Floors.Single().Units[0];
         var unitB = property.Floors.Single().Units[1];
 
+        var propertyUpdate = await admin.PutAsJsonAsync($"/api/properties/{property.Id}", new
+        {
+            name = "Workflow Building Updated",
+            address = "3 Prime Street",
+            propertyType = "Shop",
+            isArchived = false,
+        });
+        Assert.Equal(HttpStatusCode.OK, propertyUpdate.StatusCode);
+
+        var floor = property.Floors.Single();
+        var floorUpdate = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/floors/{floor.Id}", new
+        {
+            name = "Ground Floor",
+            sortOrder = 0,
+            unitNames = new[] { "Shop A", "Shop B", "Shop C" },
+            isArchived = false,
+        });
+        Assert.Equal(HttpStatusCode.OK, floorUpdate.StatusCode);
+        var editedProperty = await ReadAsync<PropertyResponse>(floorUpdate);
+        Assert.Equal("Workflow Building Updated", editedProperty.Name);
+        Assert.Equal(new[] { "Shop A", "Shop B", "Shop C" }, editedProperty.Floors.Single().Units.Select(unit => unit.Name).ToArray());
+
         var invitationResponse = await admin.PostAsJsonAsync("/api/staff/invitations", new { email = "staff-workflow@example.test", role = "BuildingStaff" });
         Assert.Equal(HttpStatusCode.Created, invitationResponse.StatusCode);
         var invitation = await ReadAsync<InvitationResponse>(invitationResponse);
@@ -123,6 +153,12 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         });
         Assert.Equal(HttpStatusCode.OK, acceptResponse.StatusCode);
         var staffUser = await ReadAsync<ApiUserResponse>(acceptResponse);
+        Assert.Equal(HttpStatusCode.BadRequest, (await staff.PostAsJsonAsync("/api/auth/accept-invitation", new
+        {
+            token = invitation.InvitationToken,
+            fullName = "Reused Invitation",
+            password = "StrongPass!123",
+        })).StatusCode);
 
         var beforeAssignment = await staff.GetAsync("/api/properties");
         Assert.Equal(HttpStatusCode.OK, beforeAssignment.StatusCode);
@@ -132,6 +168,13 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         var afterAssignment = await staff.GetAsync("/api/properties");
         var assignedProperties = await ReadAsync<List<PropertyResponse>>(afterAssignment);
         Assert.Single(assignedProperties);
+        Assert.Equal(HttpStatusCode.Forbidden, (await staff.PutAsJsonAsync($"/api/properties/{property.Id}", new
+        {
+            name = "Staff Cannot Edit Structure",
+            address = "2 Prime Street",
+            propertyType = "Shop",
+            isArchived = false,
+        })).StatusCode);
 
         var emptyTenantResponse = await staff.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null });
         Assert.Equal(HttpStatusCode.Created, emptyTenantResponse.StatusCode);
@@ -181,10 +224,13 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         {
             items = new[]
             {
-                new { chargeType = "Gas", mode = "Custom", billingMonth = "2026-01-01", amount = 120.50m, customLabel = (string?)null },
+                new { chargeType = "Gas", mode = "Custom", billingMonth = "2026-01-01", amount = (decimal?)120.50m, customLabel = (string?)null },
+                new { chargeType = "ServiceCharge", mode = "Disabled", billingMonth = "2026-01-01", amount = (decimal?)null, customLabel = (string?)null },
             },
         });
         Assert.Equal(HttpStatusCode.OK, propertyChargeResponse.StatusCode);
+        var propertyCharges = await ReadAsync<List<ChargeResponse>>(propertyChargeResponse);
+        Assert.Contains(propertyCharges, setting => setting.ChargeType == ChargeType.ServiceCharge && setting.Mode == ChargeSettingMode.Disabled && setting.Amount is null);
 
         var unitChargeResponse = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/units/{unitA.Id}/charges", new
         {
@@ -192,12 +238,14 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
             {
                 new { chargeType = "Gas", mode = "Custom", billingMonth = "2026-01-01", amount = (decimal?)90.25m, customLabel = (string?)null },
                 new { chargeType = "Water", mode = "Inherited", billingMonth = "2026-01-01", amount = (decimal?)null, customLabel = (string?)null },
+                new { chargeType = "ServiceCharge", mode = "Disabled", billingMonth = "2026-01-01", amount = (decimal?)null, customLabel = (string?)null },
             },
         });
         Assert.Equal(HttpStatusCode.OK, unitChargeResponse.StatusCode);
         var chargeSettings = await ReadAsync<List<ChargeResponse>>(unitChargeResponse);
         Assert.Contains(chargeSettings, setting => setting.ChargeType == ChargeType.Gas && setting.Amount == 90.25m && setting.Mode == ChargeSettingMode.Custom);
         Assert.Contains(chargeSettings, setting => setting.ChargeType == ChargeType.Water && setting.Amount is null && setting.Mode == ChargeSettingMode.Inherited);
+        Assert.Contains(chargeSettings, setting => setting.ChargeType == ChargeType.ServiceCharge && setting.Amount is null && setting.Mode == ChargeSettingMode.Disabled);
     }
 
     private static async Task<T> ReadAsync<T>(HttpResponseMessage response)

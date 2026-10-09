@@ -145,6 +145,11 @@ public static class PrimeTectEndpointMapping
             return Results.BadRequest(new { message = "The invitation is invalid or expired." });
         }
 
+        if (invitation.Role is not (UserRole.Manager or UserRole.BuildingStaff))
+        {
+            return Results.BadRequest(new { message = "This invitation role is not allowed." });
+        }
+
         if (await userManager.FindByEmailAsync(invitation.Email) is not null)
         {
             return Results.Conflict(new { message = "An account already exists for this invitation." });
@@ -832,7 +837,7 @@ public static class PrimeTectEndpointMapping
                 && item.ChargeType == setting.ChargeType && item.BillingMonth == setting.BillingMonth, cancellationToken);
             if (existing is null)
             {
-                db.ChargeConfigurations.Add(new ChargeConfiguration(actor.OrganizationId, propertyId, null, setting.ChargeType, ChargeSettingMode.Custom, setting.BillingMonth, setting.Amount, setting.CustomLabel));
+                db.ChargeConfigurations.Add(new ChargeConfiguration(actor.OrganizationId, propertyId, null, setting.ChargeType, setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel));
             }
             else
             {
@@ -1028,14 +1033,14 @@ public static class PrimeTectEndpointMapping
                 return "Billing month must be the first day of a month and amounts cannot be negative.";
             }
 
-            if (propertyDefaults && setting.Mode != ChargeSettingMode.Custom)
+            if (propertyDefaults && setting.Mode is not (ChargeSettingMode.Custom or ChargeSettingMode.Disabled))
             {
-                return "Property defaults must use custom settings.";
+                return "Property defaults must use custom or disabled settings.";
             }
 
-            if (!propertyDefaults && setting.Mode == ChargeSettingMode.Inherited && setting.Amount is not null)
+            if (setting.Mode is ChargeSettingMode.Inherited or ChargeSettingMode.Disabled && setting.Amount is not null)
             {
-                return "Inherited unit settings must not include an amount.";
+                return "Inherited and disabled settings must not include an amount.";
             }
 
             if (setting.Mode == ChargeSettingMode.Custom && setting.Amount is null)

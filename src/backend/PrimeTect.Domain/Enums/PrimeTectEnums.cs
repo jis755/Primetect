@@ -35,6 +35,7 @@ public enum ChargeSettingMode
 {
     Inherited = 1,
     Custom = 2,
+    Disabled = 3,
 }
 
 public enum OnboardingStatus

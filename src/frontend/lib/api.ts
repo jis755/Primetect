@@ -26,7 +26,9 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const contentType = response.headers.get("content-type") ?? "";
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
-    const message = typeof payload === "string" ? payload : payload?.message ?? payload?.title ?? "The request could not be completed.";
+    const problem = payload as { message?: string; title?: string; errors?: Record<string, string[]> };
+    const validationMessage = problem?.errors ? Object.values(problem.errors).flat()[0] : undefined;
+    const message = typeof payload === "string" ? payload : validationMessage ?? problem?.message ?? problem?.title ?? "The request could not be completed.";
     throw new ApiError(response.status, message);
   }
 
