@@ -2,7 +2,7 @@
 
 PrimeTect is a property-management platform for properties, tenants, maintenance, utilities, approvals, and future billing workflows.
 
-This repository is intentionally standalone. The first slice includes a branded Next.js frontend, a .NET Clean Architecture API, and PostgreSQL/EF Core persistence wiring. Billing and deployment are not part of this initial setup.
+This repository is intentionally standalone. It includes a branded Next.js frontend, a .NET Clean Architecture API, and PostgreSQL/EF Core persistence wiring. The current billing slice is a bounded monthly draft/review workflow; collection, payment processing, and deployment are not included.
 
 ## Repository layout
 
@@ -43,7 +43,7 @@ src/
 
    `appsettings.json` and `Properties/launchSettings.json` are intentionally local-only and ignored. A fresh clone does not need either file committed: use the sanitized example above and pass the API URL explicitly when running locally.
 
-3. Inspect and apply the PrimeTect migration only after confirming the connection string targets the dedicated `primetect` database:
+3. Inspect the PrimeTect migrations only after confirming the connection string targets the dedicated `primetect` database. The monthly billing migration is `MonthlyBillingMilestone`; this repository does not apply it automatically:
 
    ```powershell
    dotnet ef migrations list --project src/backend/PrimeTect.Infrastructure --startup-project src/backend/PrimeTect.Api
@@ -93,12 +93,13 @@ The API tests use a unique in-memory database and do not touch PostgreSQL. The f
 - Apartment buildings, individual-room buildings, and shops support configurable floors and units, generated previews, unequal floor layouts, unit enable/archive state, and explicit occupancy status.
 - Tenant records allow independently optional name and phone fields, multiple unit assignments, dated history, overlap prevention, and `Not connected` onboarding status.
 - The frontend supports property and floor editing, occupancy history with move-in/move-out closure, property charge defaults, unit-level inherited/custom/disabled charge modes, decimal amounts, and effective billing months.
+- Monthly billing supports one draft cycle per property/month, effective charge snapshots, fixed charges, metered electricity, explicit opening readings, approved-period carry-forward, warnings below Tk200, missing-reading and policy-gap blocks, staff submission, Manager/Admin return, and Manager/Admin approval. Approved snapshots are immutable and are never labeled as collected.
 - Staff invitations are accepted through a secure one-time token form with expiry and reuse protection. Invitation tokens are shared manually because email delivery is not connected.
 - Property setup and maintenance actions remain scoped by organization and role; Building Staff see only assigned properties while Admin and Manager manage structure and charges.
 
-Email delivery, email verification, two-factor authentication, billing calculations, and deployment are not implemented in this milestone. Invitation creation returns a one-time token for local setup because email delivery is not connected.
+Monthly billing intentionally blocks unresolved policy cases instead of inventing allocations: mid-month tenant changes/partial-month charges, vacant-unit charges, and any cycle without a contiguous immediately preceding approved period require explicit review. Meter resets or replacements are not bypassed by the opening-reading field and need a separate documented workflow. Email delivery, email verification, two-factor authentication, billing collection/payment actions, SafeDocs integration, SMS, police actions, and deployment are not implemented.
 
-The initial EF Core migration is committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Its applied status must be verified separately against the local `primetect` database before manual use.
+The EF Core migrations `InitialPrimeTect` and `MonthlyBillingMilestone` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. Backend workflow tests use isolated in-memory EF Core storage; they do not verify PostgreSQL-specific SQL, indexes, numeric precision behavior, or a real migration application.
 
 ## npm audit review
 

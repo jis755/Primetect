@@ -34,6 +34,14 @@ public sealed record ChargeSettingRequest(ChargeType ChargeType, ChargeSettingMo
 
 public sealed record ChargeSettingsRequest(IReadOnlyList<ChargeSettingRequest> Items);
 
+public sealed record BillingMonthRequest(DateOnly BillingMonth);
+
+public sealed record MeterReadingEntryRequest(Guid UnitBillId, decimal? PreviousReading, decimal? CurrentReading);
+
+public sealed record BillingReadingsRequest(long ExpectedVersion, IReadOnlyList<MeterReadingEntryRequest> Entries, string? Reason);
+
+public sealed record BillingActionRequest(long ExpectedVersion, string? Reason);
+
 public sealed record ApiUserResponse(Guid Id, string Email, string FullName, UserRole Role, Guid OrganizationId);
 
 public sealed record UnitResponse(Guid Id, string Name, bool IsEnabled, bool IsArchived, OccupancyStatus OccupancyStatus);
@@ -45,3 +53,55 @@ public sealed record PropertyResponse(Guid Id, string Name, string Address, Prop
 public sealed record TenantResponse(Guid Id, string? Name, string? Phone, OnboardingStatus OnboardingStatus);
 
 public sealed record ChargeConfigurationResponse(Guid Id, Guid? UnitId, ChargeType ChargeType, ChargeSettingMode Mode, DateOnly BillingMonth, decimal? Amount, string? CustomLabel);
+
+public sealed record BillingChargeLineResponse(
+    Guid Id,
+    ChargeType ChargeType,
+    string ChargeName,
+    ChargeSettingMode SettingMode,
+    bool IsMetered,
+    decimal? Rate,
+    decimal? PreviousReading,
+    decimal? CurrentReading,
+    decimal? ConsumptionUnits,
+    MeterReadingSource PreviousReadingSource,
+    decimal Amount);
+
+public sealed record BillingUnitBillResponse(
+    Guid Id,
+    Guid UnitId,
+    string UnitName,
+    Guid? OccupancyAssignmentId,
+    Guid? TenantId,
+    string? TenantName,
+    string? TenantPhone,
+    DateOnly? OccupancyStartDate,
+    DateOnly? OccupancyEndDate,
+    string? BlockingReason,
+    decimal Total,
+    bool ElectricityWarning,
+    IReadOnlyList<BillingChargeLineResponse> Charges);
+
+public sealed record BillingAuditResponse(
+    Guid Id,
+    Guid ActorUserId,
+    BillingAuditAction Action,
+    DateTimeOffset OccurredAtUtc,
+    string? Reason,
+    string? Before,
+    string? After);
+
+public sealed record BillingCycleResponse(
+    Guid Id,
+    Guid PropertyId,
+    DateOnly BillingMonth,
+    BillingCycleStatus Status,
+    long Version,
+    Guid LastChangedByUserId,
+    DateTimeOffset LastChangedAtUtc,
+    string? ReturnReason,
+    decimal DraftTotal,
+    decimal? ApprovedTotal,
+    int BlockingBillCount,
+    IReadOnlyList<BillingUnitBillResponse> Bills,
+    IReadOnlyList<BillingAuditResponse> Audit);

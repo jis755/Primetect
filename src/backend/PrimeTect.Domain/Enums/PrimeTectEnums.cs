@@ -38,6 +38,30 @@ public enum ChargeSettingMode
     Disabled = 3,
 }
 
+public enum BillingCycleStatus
+{
+    Draft = 1,
+    Submitted = 2,
+    Returned = 3,
+    Approved = 4,
+}
+
+public enum BillingAuditAction
+{
+    Generated = 1,
+    Saved = 2,
+    Submitted = 3,
+    Returned = 4,
+    Approved = 5,
+}
+
+public enum MeterReadingSource
+{
+    Missing = 1,
+    ApprovedPeriod = 2,
+    OpeningEntry = 3,
+}
+
 public enum OnboardingStatus
 {
     NotConnected = 1,

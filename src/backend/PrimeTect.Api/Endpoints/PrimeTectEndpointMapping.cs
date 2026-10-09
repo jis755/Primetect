@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -48,6 +49,12 @@ public static class PrimeTectEndpointMapping
         secure.MapPut("/properties/{propertyId:guid}/charges", (Delegate)PutPropertyChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)GetUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
         secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/charges", (Delegate)PutUnitChargesAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles", (Delegate)GenerateBillingCycleAsync);
+        secure.MapGet("/properties/{propertyId:guid}/billing-cycles/{billingMonth}", (Delegate)GetBillingCycleAsync);
+        secure.MapPut("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/meter-readings", (Delegate)SaveBillingReadingsAsync);
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/submit", (Delegate)SubmitBillingCycleAsync);
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/approve", (Delegate)ApproveBillingCycleAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin), nameof(UserRole.Manager)));
     }
 
     private static async Task<IResult> RegisterOwnerAsync(
@@ -841,7 +848,7 @@ public static class PrimeTectEndpointMapping
             }
             else
             {
-                existing.Update(ChargeSettingMode.Custom, setting.BillingMonth, setting.Amount, setting.CustomLabel);
+                existing.Update(setting.Mode, setting.BillingMonth, setting.Amount, setting.CustomLabel);
             }
         }
 
@@ -920,6 +927,556 @@ public static class PrimeTectEndpointMapping
         await db.SaveChangesAsync(cancellationToken);
         return Results.Ok(await db.ChargeConfigurations.AsNoTracking().Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.UnitId == unitId).Select(item => ToChargeResponse(item)).ToListAsync(cancellationToken));
     }
+
+    private static async Task<IResult> GenerateBillingCycleAsync(
+        Guid propertyId,
+        BillingMonthRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.IsManagerOrAdmin)
+        {
+            return Results.Forbid();
+        }
+
+        if (request.BillingMonth.Day != 1)
+        {
+            return BadRequest("Billing month must be the first day of a month.");
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (await db.BillingCycles.AnyAsync(cycle => cycle.OrganizationId == actor.OrganizationId && cycle.PropertyId == propertyId && cycle.BillingMonth == request.BillingMonth, cancellationToken))
+        {
+            return Results.Conflict(new { message = "A billing cycle already exists for this property and month." });
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var cycle = new BillingCycle(actor.OrganizationId, propertyId, request.BillingMonth, actor.UserId);
+            db.BillingCycles.Add(cycle);
+
+            var monthEnd = request.BillingMonth.AddMonths(1).AddDays(-1);
+            var units = await db.Units.AsNoTracking()
+                .Where(unit => unit.OrganizationId == actor.OrganizationId && unit.PropertyId == propertyId && unit.IsEnabled && !unit.IsArchived)
+                .OrderBy(unit => unit.FloorId).ThenBy(unit => unit.Name)
+                .ToListAsync(cancellationToken);
+            var unitIds = units.Select(unit => unit.Id).ToArray();
+            var occupancy = await db.OccupancyAssignments.AsNoTracking()
+                .Where(item => item.OrganizationId == actor.OrganizationId && unitIds.Contains(item.UnitId) && item.StartDate <= monthEnd && (item.EndDate == null || item.EndDate >= request.BillingMonth))
+                .Join(db.Tenants.AsNoTracking(), item => item.TenantId, tenant => tenant.Id, (item, tenant) => new OccupancySnapshot(item, tenant.Name, tenant.Phone))
+                .ToListAsync(cancellationToken);
+            var configurations = await db.ChargeConfigurations.AsNoTracking()
+                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.BillingMonth <= request.BillingMonth && (item.UnitId == null || unitIds.Contains(item.UnitId.Value)))
+                .ToListAsync(cancellationToken);
+
+            var previousCycle = await db.BillingCycles.AsNoTracking().FirstOrDefaultAsync(item =>
+                item.OrganizationId == actor.OrganizationId
+                && item.PropertyId == propertyId
+                && item.BillingMonth == request.BillingMonth.AddMonths(-1), cancellationToken);
+            var previousElectricity = new Dictionary<Guid, BillingChargeLine>();
+            if (previousCycle?.Status == BillingCycleStatus.Approved)
+            {
+                var previousBillIds = await db.BillingUnitBills.AsNoTracking()
+                    .Where(bill => bill.BillingCycleId == previousCycle.Id && bill.OrganizationId == actor.OrganizationId)
+                    .ToDictionaryAsync(bill => bill.Id, bill => bill.UnitId, cancellationToken);
+                var previousLines = await db.BillingChargeLines.AsNoTracking()
+                    .Where(line => line.OrganizationId == actor.OrganizationId && line.ChargeType == ChargeType.Electricity && previousBillIds.Keys.Contains(line.BillingUnitBillId))
+                    .ToListAsync(cancellationToken);
+                foreach (var previousLine in previousLines)
+                {
+                    if (previousBillIds.TryGetValue(previousLine.BillingUnitBillId, out var unitId))
+                    {
+                        previousElectricity[unitId] = previousLine;
+                    }
+                }
+            }
+
+            foreach (var unit in units)
+            {
+                var unitOccupancies = occupancy.Where(item => item.Assignment.UnitId == unit.Id).OrderBy(item => item.Assignment.StartDate).ToList();
+                var fullMonthOccupancy = unitOccupancies.Count == 1
+                    && unitOccupancies[0].Assignment.StartDate <= request.BillingMonth
+                    && (unitOccupancies[0].Assignment.EndDate is null || unitOccupancies[0].Assignment.EndDate >= monthEnd);
+                var blockingReason = unitOccupancies.Count == 0
+                    ? "Vacant-unit charge policy is not selected; this draft is blocked for review."
+                    : !fullMonthOccupancy
+                        ? "Mid-month tenant change or partial-month allocation policy is not selected; this draft is blocked for review."
+                        : null;
+                var selectedOccupancy = fullMonthOccupancy ? unitOccupancies[0] : null;
+                var bill = new BillingUnitBill(
+                    actor.OrganizationId,
+                    cycle.Id,
+                    unit.Id,
+                    unit.Name,
+                    selectedOccupancy?.Assignment.Id,
+                    selectedOccupancy?.Assignment.TenantId,
+                    selectedOccupancy?.TenantName,
+                    selectedOccupancy?.TenantPhone,
+                    selectedOccupancy?.Assignment.StartDate,
+                    selectedOccupancy?.Assignment.EndDate,
+                    blockingReason);
+                db.BillingUnitBills.Add(bill);
+
+                if (blockingReason is not null)
+                {
+                    continue;
+                }
+
+                var billLines = new List<BillingChargeLine>();
+                foreach (var effective in ResolveEffectiveCharges(configurations, unit.Id, request.BillingMonth))
+                {
+                    var isMetered = effective.ChargeType == ChargeType.Electricity;
+                    var previousLine = isMetered && previousElectricity.TryGetValue(unit.Id, out var line) ? line : null;
+                    var previousReading = previousLine?.CurrentReading;
+                    var source = previousReading is null ? MeterReadingSource.Missing : MeterReadingSource.ApprovedPeriod;
+                    var amount = isMetered ? 0m : RoundMoney(effective.Amount);
+                    var chargeLine = new BillingChargeLine(actor.OrganizationId, bill.Id, effective.ChargeType, effective.ChargeName, effective.Mode, isMetered, effective.Amount, amount, previousReading, source);
+                    db.BillingChargeLines.Add(chargeLine);
+                    billLines.Add(chargeLine);
+                }
+
+                RecalculateBillState(bill, billLines);
+            }
+
+            var snapshot = new { status = cycle.Status.ToString(), month = cycle.BillingMonth, units = units.Count };
+            db.BillingAuditEntries.Add(new BillingAuditEntry(actor.OrganizationId, cycle.Id, actor.UserId, BillingAuditAction.Generated, "Initial monthly draft generated.", null, JsonSerializer.Serialize(snapshot)));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Created($"/api/properties/{propertyId}/billing-cycles/{request.BillingMonth:yyyy-MM}", await ToBillingCycleResponseAsync(db, cycle.Id, cancellationToken));
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "The billing cycle was created by another request. Refresh before continuing." });
+        }
+    }
+
+    private static async Task<IResult> GetBillingCycleAsync(
+        Guid propertyId,
+        string billingMonth,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
+        {
+            return BadRequest("Billing month must use the yyyy-MM format.");
+        }
+
+        if (await AccessibleProperties(db, actor, includeArchived: false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        var cycle = await db.BillingCycles.AsNoTracking().FirstOrDefaultAsync(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.BillingMonth == month, cancellationToken);
+        return cycle is null
+            ? Results.NotFound()
+            : Results.Ok(await ToBillingCycleResponseAsync(db, cycle.Id, cancellationToken));
+    }
+
+    private static async Task<IResult> SaveBillingReadingsAsync(
+        Guid propertyId,
+        Guid billingCycleId,
+        BillingReadingsRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
+        if (cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (cycle.Status is not (BillingCycleStatus.Draft or BillingCycleStatus.Returned))
+        {
+            return Results.Conflict(new { message = "Submitted and approved billing cycles cannot be edited. Return the cycle before changing readings." });
+        }
+
+        if (cycle.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This billing cycle changed since it was loaded. Refresh before saving." });
+        }
+
+        var bills = await db.BillingUnitBills.Where(bill => bill.BillingCycleId == cycle.Id && bill.OrganizationId == actor.OrganizationId).ToListAsync(cancellationToken);
+        var billById = bills.ToDictionary(bill => bill.Id);
+        var lines = await db.BillingChargeLines.Where(line => line.OrganizationId == actor.OrganizationId && billById.Keys.Contains(line.BillingUnitBillId) && line.ChargeType == ChargeType.Electricity).ToListAsync(cancellationToken);
+        var lineByBillId = lines.ToDictionary(line => line.BillingUnitBillId);
+        var before = new List<object>();
+
+        foreach (var entry in request.Entries ?? [])
+        {
+            if (!billById.ContainsKey(entry.UnitBillId) || !lineByBillId.TryGetValue(entry.UnitBillId, out var line))
+            {
+                return BadRequest("Every meter entry must reference an electricity line in this billing cycle.");
+            }
+
+            if (line.PreviousReadingSource == MeterReadingSource.ApprovedPeriod && entry.PreviousReading is not null && entry.PreviousReading != line.PreviousReading)
+            {
+                return BadRequest("The previous approved-period reading is a snapshot and cannot be changed.");
+            }
+
+            var previous = entry.PreviousReading ?? line.PreviousReading;
+            if (previous is not null && entry.CurrentReading is not null && entry.CurrentReading < previous)
+            {
+                return BadRequest("Negative electricity consumption is not allowed. Meter reset or replacement needs a separate documented workflow.");
+            }
+
+            before.Add(new { entry.UnitBillId, line.PreviousReading, line.CurrentReading, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource });
+        }
+
+        if (request.Entries is null || request.Entries.Count == 0)
+        {
+            return BadRequest("At least one meter entry is required.");
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            foreach (var entry in request.Entries)
+            {
+                var line = lineByBillId[entry.UnitBillId];
+                var previous = entry.PreviousReading ?? line.PreviousReading;
+                var source = line.PreviousReadingSource == MeterReadingSource.ApprovedPeriod
+                    ? MeterReadingSource.ApprovedPeriod
+                    : previous is null ? MeterReadingSource.Missing : MeterReadingSource.OpeningEntry;
+                decimal? units = previous is not null && entry.CurrentReading is not null ? entry.CurrentReading.Value - previous.Value : null;
+                var amount = units is null ? 0m : RoundMoney(units.Value * (line.RateSnapshot ?? 0m));
+                line.SetMeterReadings(previous, entry.CurrentReading, source, units, amount);
+                RecalculateBillState(billById[entry.UnitBillId], lines.Where(item => item.BillingUnitBillId == entry.UnitBillId));
+            }
+
+            var after = request.Entries.Select(entry =>
+            {
+                var line = lineByBillId[entry.UnitBillId];
+                return new { entry.UnitBillId, line.PreviousReading, line.CurrentReading, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource };
+            }).ToList();
+            cycle.MarkDataChanged(actor.UserId);
+            db.BillingAuditEntries.Add(new BillingAuditEntry(actor.OrganizationId, cycle.Id, actor.UserId, BillingAuditAction.Saved, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(after)));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Ok(await ToBillingCycleResponseAsync(db, cycle.Id, cancellationToken));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This billing cycle changed concurrently. Refresh before saving." });
+        }
+    }
+
+    private static async Task<IResult> SubmitBillingCycleAsync(
+        Guid propertyId,
+        Guid billingCycleId,
+        BillingActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
+        if (cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (cycle.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This billing cycle changed since it was loaded. Refresh before submitting." });
+        }
+
+        var bills = await db.BillingUnitBills.AsNoTracking().Where(bill => bill.BillingCycleId == cycle.Id).ToListAsync(cancellationToken);
+        var blocked = bills.Where(bill => bill.BlockingReason is not null).Select(bill => bill.BlockingReason).Distinct().ToList();
+        if (blocked.Count > 0)
+        {
+            return BadRequest($"This billing cycle has unresolved items: {string.Join(" ", blocked)}");
+        }
+
+        var before = new { status = cycle.Status.ToString(), version = cycle.Version };
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            cycle.Submit(actor.UserId);
+            var after = new { status = cycle.Status.ToString(), version = cycle.Version };
+            db.BillingAuditEntries.Add(new BillingAuditEntry(actor.OrganizationId, cycle.Id, actor.UserId, BillingAuditAction.Submitted, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(after)));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Ok(await ToBillingCycleResponseAsync(db, cycle.Id, cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This billing cycle changed concurrently. Refresh before submitting." });
+        }
+    }
+
+    private static async Task<IResult> ReturnBillingCycleAsync(
+        Guid propertyId,
+        Guid billingCycleId,
+        BillingActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
+        if (cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (cycle.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This billing cycle changed since it was loaded. Refresh before returning it." });
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var before = new { status = cycle.Status.ToString(), version = cycle.Version };
+            cycle.Return(actor.UserId, request.Reason ?? string.Empty);
+            var after = new { status = cycle.Status.ToString(), version = cycle.Version, reason = cycle.ReturnReason };
+            db.BillingAuditEntries.Add(new BillingAuditEntry(actor.OrganizationId, cycle.Id, actor.UserId, BillingAuditAction.Returned, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(after)));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Ok(await ToBillingCycleResponseAsync(db, cycle.Id, cancellationToken));
+        }
+        catch (ArgumentException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return BadRequest(exception.Message);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This billing cycle changed concurrently. Refresh before returning it." });
+        }
+    }
+
+    private static async Task<IResult> ApproveBillingCycleAsync(
+        Guid propertyId,
+        Guid billingCycleId,
+        BillingActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
+        if (cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (cycle.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This billing cycle changed since it was loaded. Refresh before approving." });
+        }
+
+        if (cycle.Status != BillingCycleStatus.Submitted)
+        {
+            return BadRequest("Only submitted billing cycles can be approved.");
+        }
+
+        var bills = await db.BillingUnitBills.AsNoTracking().Where(bill => bill.BillingCycleId == cycle.Id).ToListAsync(cancellationToken);
+        var blocked = bills.Where(bill => bill.BlockingReason is not null).Select(bill => bill.BlockingReason).Distinct().ToList();
+        if (blocked.Count > 0)
+        {
+            return BadRequest($"This billing cycle has unresolved items: {string.Join(" ", blocked)}");
+        }
+
+        if (actor.UserId == cycle.LastChangedByUserId)
+        {
+            return Results.Problem(detail: "The person who last changed billing data cannot approve that version.", statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var total = RoundMoney(bills.Sum(bill => bill.Total));
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var before = new { status = cycle.Status.ToString(), version = cycle.Version, total };
+            cycle.Approve(actor.UserId, total);
+            var after = new { status = cycle.Status.ToString(), version = cycle.Version, total = cycle.ApprovedTotal };
+            db.BillingAuditEntries.Add(new BillingAuditEntry(actor.OrganizationId, cycle.Id, actor.UserId, BillingAuditAction.Approved, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(after)));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Ok(await ToBillingCycleResponseAsync(db, cycle.Id, cancellationToken));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This billing cycle changed concurrently. Refresh before approving." });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The approval could not be persisted atomically. No approval was recorded.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static async Task<BillingCycle?> AccessibleBillingCycleAsync(
+        PropertyManagementDbContext db,
+        RequestUser actor,
+        Guid propertyId,
+        Guid billingCycleId,
+        CancellationToken cancellationToken) =>
+        await db.BillingCycles.FirstOrDefaultAsync(cycle => cycle.Id == billingCycleId && cycle.PropertyId == propertyId && cycle.OrganizationId == actor.OrganizationId
+            && db.Properties.Any(property => property.Id == propertyId && property.OrganizationId == actor.OrganizationId && !property.IsArchived)
+            && (!actor.IsStaff || db.StaffPropertyAssignments.Any(assignment => assignment.OrganizationId == actor.OrganizationId && assignment.UserId == actor.UserId && assignment.PropertyId == propertyId)), cancellationToken);
+
+    private static async Task<BillingCycleResponse> ToBillingCycleResponseAsync(PropertyManagementDbContext db, Guid billingCycleId, CancellationToken cancellationToken)
+    {
+        var cycle = await db.BillingCycles.AsNoTracking().FirstAsync(item => item.Id == billingCycleId, cancellationToken);
+        var bills = await db.BillingUnitBills.AsNoTracking().Where(item => item.BillingCycleId == billingCycleId).OrderBy(item => item.UnitNameSnapshot).ToListAsync(cancellationToken);
+        var billIds = bills.Select(item => item.Id).ToArray();
+        var lines = await db.BillingChargeLines.AsNoTracking().Where(item => billIds.Contains(item.BillingUnitBillId)).OrderBy(item => item.ChargeType).ToListAsync(cancellationToken);
+        var audit = await db.BillingAuditEntries.AsNoTracking().Where(item => item.BillingCycleId == billingCycleId).OrderBy(item => item.OccurredAtUtc).ToListAsync(cancellationToken);
+        var billResponses = bills.Select(bill => new BillingUnitBillResponse(
+            bill.Id,
+            bill.UnitId,
+            bill.UnitNameSnapshot,
+            bill.OccupancyAssignmentId,
+            bill.TenantId,
+            bill.TenantNameSnapshot,
+            bill.TenantPhoneSnapshot,
+            bill.OccupancyStartDate,
+            bill.OccupancyEndDate,
+            bill.BlockingReason,
+            bill.Total,
+            bill.ElectricityWarning,
+            lines.Where(line => line.BillingUnitBillId == bill.Id).Select(line => new BillingChargeLineResponse(line.Id, line.ChargeType, line.ChargeNameSnapshot, line.SettingModeSnapshot, line.IsMetered, line.RateSnapshot, line.PreviousReading, line.CurrentReading, line.ConsumptionUnits, line.PreviousReadingSource, line.Amount)).ToList())).ToList();
+        return new BillingCycleResponse(
+            cycle.Id,
+            cycle.PropertyId,
+            cycle.BillingMonth,
+            cycle.Status,
+            cycle.Version,
+            cycle.LastChangedByUserId,
+            cycle.LastChangedAtUtc,
+            cycle.ReturnReason,
+            RoundMoney(billResponses.Sum(bill => bill.Total)),
+            cycle.ApprovedTotal,
+            billResponses.Count(bill => bill.BlockingReason is not null),
+            billResponses,
+            audit.Select(item => new BillingAuditResponse(item.Id, item.ActorUserId, item.Action, item.OccurredAtUtc, item.Reason, item.BeforeJson, item.AfterJson)).ToList());
+    }
+
+    private static IReadOnlyList<EffectiveCharge> ResolveEffectiveCharges(IReadOnlyList<ChargeConfiguration> configurations, Guid unitId, DateOnly billingMonth)
+    {
+        var result = new List<EffectiveCharge>();
+        foreach (var chargeType in Enum.GetValues<ChargeType>())
+        {
+            var propertySetting = configurations.Where(item => item.UnitId is null && item.ChargeType == chargeType && item.BillingMonth <= billingMonth).OrderByDescending(item => item.BillingMonth).FirstOrDefault();
+            var unitSetting = configurations.Where(item => item.UnitId == unitId && item.ChargeType == chargeType && item.BillingMonth <= billingMonth).OrderByDescending(item => item.BillingMonth).FirstOrDefault();
+            var selected = unitSetting?.Mode switch
+            {
+                ChargeSettingMode.Disabled => null,
+                ChargeSettingMode.Custom => unitSetting,
+                ChargeSettingMode.Inherited => propertySetting,
+                _ => propertySetting,
+            };
+            if (selected is null || selected.Mode == ChargeSettingMode.Disabled || selected.Amount is null)
+            {
+                continue;
+            }
+
+            var mode = unitSetting?.Mode == ChargeSettingMode.Custom ? ChargeSettingMode.Custom : selected.Mode;
+            result.Add(new EffectiveCharge(chargeType, ChargeName(chargeType, selected.CustomLabel), mode, selected.Amount.Value));
+        }
+
+        return result;
+    }
+
+    private static string ChargeName(ChargeType chargeType, string? customLabel) =>
+        chargeType == ChargeType.Custom && !string.IsNullOrWhiteSpace(customLabel)
+            ? customLabel.Trim()
+            : chargeType switch
+            {
+                ChargeType.Electricity => "Electricity",
+                ChargeType.Water => "Water",
+                ChargeType.Gas => "Gas",
+                ChargeType.ServiceCharge => "Service charge",
+                ChargeType.Rent => "Rent",
+                _ => "Custom charge",
+            };
+
+    private static void RecalculateBillState(BillingUnitBill bill, IEnumerable<BillingChargeLine> chargeLines)
+    {
+        var lines = chargeLines.ToList();
+        var electricity = lines.FirstOrDefault(line => line.ChargeType == ChargeType.Electricity);
+        var blockingReason = bill.BlockingReason;
+        if (bill.OccupancyAssignmentId is not null)
+        {
+            blockingReason = electricity is null
+                ? null
+                : electricity.CurrentReading is null
+                    ? electricity.PreviousReadingSource == MeterReadingSource.Missing
+                        ? "Opening electricity reading and current reading are required; no immediately preceding approved period is available."
+                        : "Current electricity reading is required."
+                    : electricity.PreviousReading is null
+                        ? "Opening electricity reading is required."
+                        : null;
+        }
+
+        var total = RoundMoney(lines.Sum(line => line.Amount));
+        bill.SetCalculation(total, electricity is not null && electricity.CurrentReading is not null && electricity.Amount < 200m);
+        bill.SetBlockingReason(blockingReason);
+    }
+
+    private static decimal RoundMoney(decimal amount) => decimal.Round(amount, 2, MidpointRounding.AwayFromZero);
+
+    private sealed record OccupancySnapshot(OccupancyAssignment Assignment, string? TenantName, string? TenantPhone);
+
+    private sealed record EffectiveCharge(ChargeType ChargeType, string ChargeName, ChargeSettingMode Mode, decimal Amount);
 
     private static IQueryable<Property> AccessibleProperties(PropertyManagementDbContext db, RequestUser actor, bool includeArchived) =>
         db.Properties.Where(property => property.OrganizationId == actor.OrganizationId

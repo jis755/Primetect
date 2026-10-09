@@ -15,8 +15,9 @@ public static class InfrastructureServiceCollectionExtensions
         if (string.Equals(provider, "InMemory", StringComparison.OrdinalIgnoreCase))
         {
             var databaseName = configuration["Database:Name"] ?? "PrimeTectTests";
-            services.AddDbContext<PropertyManagementDbContext>(options => options
+            services.AddDbContext<PropertyManagementDbContext>((serviceProvider, options) => options
                 .UseInMemoryDatabase(databaseName)
+                .AddInterceptors(serviceProvider.GetServices<ISaveChangesInterceptor>())
                 .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
         }
         else
@@ -28,7 +29,9 @@ public static class InfrastructureServiceCollectionExtensions
                 throw new InvalidOperationException("ConnectionStrings:PrimeTectDatabase must be configured for PostgreSQL.");
             }
 
-            services.AddDbContext<PropertyManagementDbContext>(options => options.UseNpgsql(connectionString));
+            services.AddDbContext<PropertyManagementDbContext>((serviceProvider, options) => options
+                .UseNpgsql(connectionString)
+                .AddInterceptors(serviceProvider.GetServices<ISaveChangesInterceptor>()));
         }
 
         return services;

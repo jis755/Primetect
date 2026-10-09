@@ -27,6 +27,14 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<UserInvitation> UserInvitations => Set<UserInvitation>();
 
+    public DbSet<BillingCycle> BillingCycles => Set<BillingCycle>();
+
+    public DbSet<BillingUnitBill> BillingUnitBills => Set<BillingUnitBill>();
+
+    public DbSet<BillingChargeLine> BillingChargeLines => Set<BillingChargeLine>();
+
+    public DbSet<BillingAuditEntry> BillingAuditEntries => Set<BillingAuditEntry>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -128,6 +136,63 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(invitation => invitation.TokenHash).HasMaxLength(128).IsRequired();
             entity.HasIndex(invitation => invitation.TokenHash).IsUnique();
             entity.HasIndex(invitation => new { invitation.OrganizationId, invitation.Email });
+        });
+
+        modelBuilder.Entity<BillingCycle>(entity =>
+        {
+            entity.ToTable("billing_cycles");
+            entity.HasKey(cycle => cycle.Id);
+            entity.Property(cycle => cycle.BillingMonth).HasColumnType("date");
+            entity.Property(cycle => cycle.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(cycle => cycle.Version).IsConcurrencyToken();
+            entity.Property(cycle => cycle.ApprovedTotal).HasPrecision(18, 2);
+            entity.HasIndex(cycle => new { cycle.OrganizationId, cycle.PropertyId, cycle.BillingMonth }).IsUnique();
+            entity.HasOne<Property>().WithMany().HasForeignKey(cycle => cycle.PropertyId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<BillingUnitBill>(entity =>
+        {
+            entity.ToTable("billing_unit_bills");
+            entity.HasKey(bill => bill.Id);
+            entity.Property(bill => bill.UnitNameSnapshot).HasMaxLength(100).IsRequired();
+            entity.Property(bill => bill.TenantNameSnapshot).HasMaxLength(200);
+            entity.Property(bill => bill.TenantPhoneSnapshot).HasMaxLength(50);
+            entity.Property(bill => bill.BlockingReason).HasMaxLength(300);
+            entity.Property(bill => bill.Total).HasPrecision(18, 2);
+            entity.HasIndex(bill => new { bill.BillingCycleId, bill.UnitId }).IsUnique();
+            entity.HasOne<BillingCycle>().WithMany().HasForeignKey(bill => bill.BillingCycleId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Unit>().WithMany().HasForeignKey(bill => bill.UnitId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<OccupancyAssignment>().WithMany().HasForeignKey(bill => bill.OccupancyAssignmentId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Tenant>().WithMany().HasForeignKey(bill => bill.TenantId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<BillingChargeLine>(entity =>
+        {
+            entity.ToTable("billing_charge_lines");
+            entity.HasKey(line => line.Id);
+            entity.Property(line => line.ChargeType).HasConversion<string>().HasMaxLength(40).IsRequired();
+            entity.Property(line => line.ChargeNameSnapshot).HasMaxLength(120).IsRequired();
+            entity.Property(line => line.SettingModeSnapshot).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(line => line.PreviousReadingSource).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(line => line.RateSnapshot).HasPrecision(18, 4);
+            entity.Property(line => line.PreviousReading).HasPrecision(18, 4);
+            entity.Property(line => line.CurrentReading).HasPrecision(18, 4);
+            entity.Property(line => line.ConsumptionUnits).HasPrecision(18, 4);
+            entity.Property(line => line.Amount).HasPrecision(18, 2);
+            entity.HasIndex(line => new { line.BillingUnitBillId, line.ChargeType }).IsUnique();
+            entity.HasOne<BillingUnitBill>().WithMany().HasForeignKey(line => line.BillingUnitBillId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<BillingAuditEntry>(entity =>
+        {
+            entity.ToTable("billing_audit_entries");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.Action).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(audit => audit.Reason).HasMaxLength(500);
+            entity.Property(audit => audit.BeforeJson).HasColumnType("text");
+            entity.Property(audit => audit.AfterJson).HasColumnType("text");
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.BillingCycleId, audit.OccurredAtUtc });
+            entity.HasOne<BillingCycle>().WithMany().HasForeignKey(audit => audit.BillingCycleId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
