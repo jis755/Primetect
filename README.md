@@ -183,6 +183,67 @@ The billing month is the month in which the bill is issued. A February-issued bi
 approved period's current reading; observation readings remain date-only and the exact observation time is not currently
 stored. Server save/submission audit timestamps remain separate.
 
+### Fresh collection and room-overview demo
+
+For the collection-entry, room/meter-issue, and full-property overview walkthrough, a new isolated synthetic database is
+prepared at `primetect_demo_overviews_20261010_c8a2b8a`. All eight committed migrations were applied from an empty
+database. It is separate from `primetect` and every earlier demo database; do not run migrations or seed commands against
+those databases.
+
+Ignored local files are:
+
+- `src/backend/PrimeTect.Api/appsettings.CollectionDemo.json`, containing the local demo connection and CORS origins.
+- `src/backend/PrimeTect.Api/collection-demo-credentials.local.json`, containing separate Admin, Manager, Staff, and
+  Finance login credentials. View it locally with
+  `Get-Content src/backend/PrimeTect.Api/collection-demo-credentials.local.json`; never copy or print its passwords.
+
+The prepared API URL is `http://127.0.0.1:5001` and health is
+`http://127.0.0.1:5001/api/health`. Start one API process using the ignored configuration and the existing local-only
+`Demo` environment (which uses ephemeral Data Protection keys):
+
+```powershell
+$demo = Get-Content src/backend/PrimeTect.Api/appsettings.CollectionDemo.json | ConvertFrom-Json
+$env:ASPNETCORE_ENVIRONMENT = "Demo"
+$env:Database__Provider = "PostgreSQL"
+$env:ConnectionStrings__PrimeTectDatabase = $demo.ConnectionStrings.PrimeTectDatabase
+$env:AllowedOrigins__0 = "http://127.0.0.1:3001"
+$env:AllowedOrigins__1 = "http://localhost:3001"
+dotnet run --no-build --no-launch-profile --project src/backend/PrimeTect.Api --urls http://127.0.0.1:5001
+```
+
+In a second terminal, start one frontend process:
+
+```powershell
+Set-Location src/frontend
+$env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:5001"
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3001
+```
+
+Open `http://127.0.0.1:3001`. Stop foreground processes with `Ctrl+C`. If a background process is used, confirm its
+listener first with `Get-NetTCPConnection -LocalPort 5001 -State Listen` and stop only the confirmed PrimeTect process.
+No email, SMS, payment-provider, SafeDocs, QR, or OCR action is performed.
+
+The fixture includes unequal Ground/Upper floors, five metered units plus fixed-charge-only U-04, a named tenant on two
+units, an unnamed tenant, approved Tk200 electricity bills, unpaid/partially confirmed/pending/fully confirmed collection
+examples, and acknowledged/open plus resolved room issues. Reading months demonstrate Missing, SavedDraft, Returned,
+AwaitingReview, and Approved at the existing billing-cycle approval granularity. Pending reported money remains separate
+from confirmed money, and approved bills remain labelled billed rather than collected.
+
+Bilingual manual checklist:
+
+1. Log in with each role from the ignored credential file. Confirm Staff cannot open the restricted annex, Finance cannot
+   edit charges/readings or report issues, and Admin can see both properties.
+2. As Manager or Staff, open **Meter Readings / মিটার রিডিং দিন** for `Overview Demo Tower`, select August 2026, and
+   use **View all rooms / সব রুম দেখুন**. Confirm U-04 is **Not applicable**, not a missing reading, and inspect the
+   issue indicator on G-01.
+3. Open **Collections / টাকা পাওয়া লিখুন** for August 2026. Confirm G-01 is unpaid, G-02 is partially confirmed,
+   U-01/U-02 have pending Tk199/Tk199.00 reports, U-03 is fully confirmed, and the totals reconcile to billed Tk1050,
+   confirmed Tk250, pending Tk398, and outstanding Tk800.
+4. As Admin, inspect the room/meter issue list: G-01 is acknowledged/open for follow-up and U-04 is resolved. Confirm
+   issue reporting did not change any bill, reading, or collection.
+5. Repeat at desktop and narrow mobile widths, test filters and validation, and confirm no table requires horizontal
+   scrolling. Browser automation was unavailable during preparation, so visual verification remains pending.
+
 ## Build and verify
 
 ```powershell
