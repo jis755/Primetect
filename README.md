@@ -133,6 +133,56 @@ Manual review checklist:
 5. Repeat at a narrow browser width and check keyboard focus, error text, and touch-target wrapping. Browser automation
    was unavailable during this checkpoint, so desktop/mobile visual verification remains pending.
 
+### Fresh guided-entry demo
+
+The current checkpoint also has a new isolated synthetic demo database:
+`primetect_demo_guided_20261010_da3c89c`. It was created from empty and all seven committed migrations were applied
+to it. It is separate from both `primetect` and the earlier collection demo. It contains unequal Ground/Upper floors,
+mixed fixed and metered charges, inherited/custom/disabled examples, a named tenant occupying multiple units, an
+unnamed occupancy, two consecutive approved billing months (September and October 2026), and one pending cash
+collection report.
+
+Ignored local files for this demo are:
+
+- `src/backend/PrimeTect.Api/appsettings.GuidedDemo.json`, loaded by the `GuidedDemo` environment.
+- `src/backend/PrimeTect.Api/demo-guided-credentials.local.json`, containing separate Admin, Building Manager,
+  Building Staff, and Finance Manager accounts. View it locally with
+  `Get-Content src/backend/PrimeTect.Api/demo-guided-credentials.local.json`; never copy its values into tracked files.
+
+The prepared local URLs are `http://127.0.0.1:5000` (API),
+`http://127.0.0.1:5000/api/health` (health), and `http://127.0.0.1:3000` (frontend). Start one API and one frontend
+process only:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "GuidedDemo"
+dotnet run --no-build --no-launch-profile --project src/backend/PrimeTect.Api --urls http://127.0.0.1:5000
+Set-Location src/frontend
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+Stop foreground processes with `Ctrl+C`. For the currently backgrounded API, first confirm the listener belongs to
+PrimeTect.Api with `Get-NetTCPConnection -LocalPort 5000 -State Listen`, then stop only that confirmed process with
+`Stop-Process -Id <confirmed-api-pid>`. Do not point either process at `primetect` or an earlier demo.
+
+Bilingual manual checklist:
+
+1. Log in as Building Manager/Building Staff. Switch **English / বাংলা** and confirm the selected October 2026
+   property/month, unit, and unsaved reading input remain unchanged. Open **Meter Readings / মিটার রিডিং দিন**, enter
+   a current reading for G-01, choose **Save & Next Room / সেভ করে পরের রুম**, and confirm the save message before moving on.
+2. In **Collections / টাকা পাওয়া লিখুন**, select the approved October bill, choose **Full amount / পূর্ণ পরিমাণ** or
+   **Other amount / অন্য পরিমাণ**, review the unit/month/method confirmation, and verify the existing pending receipt is
+   shown as sent for approval, not paid.
+3. Log in as Finance Manager. Confirm only the collection/reversal review queue is available; return a report with a
+   reason or approve it independently after checking the exact unit and amount.
+4. Log in as Admin. Confirm organization-wide settings, billing review, collection review, and **Roles & permissions**
+   remain available. Confirm Building Staff cannot open property, tenant, charge, staff, or approval administration.
+5. Repeat at desktop and narrow mobile widths. Check keyboard focus, validation/error states, and that no table causes
+   horizontal page scrolling. Browser automation was unavailable for this checkpoint, so visual verification remains pending.
+
+The billing month is the month in which the bill is issued. A February-issued bill uses the immediately preceding
+approved period's current reading; observation readings remain date-only and the exact observation time is not currently
+stored. Server save/submission audit timestamps remain separate.
+
 ## Build and verify
 
 ```powershell

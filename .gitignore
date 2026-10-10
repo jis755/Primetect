@@ -16,8 +16,10 @@ appsettings.*.Local.json
 appsettings.Development.json
 src/backend/PrimeTect.Api/appsettings.Demo.json
 src/backend/PrimeTect.Api/appsettings.json
+src/backend/PrimeTect.Api/appsettings.GuidedDemo.json
 src/backend/PrimeTect.Api/Properties/launchSettings.json
 src/backend/PrimeTect.Api/demo-credentials.local.json
+src/backend/PrimeTect.Api/demo-guided-credentials.local.json
 *.secret.json
 
 # .NET build output
