@@ -23,6 +23,8 @@ public enum OrganizationPermission
     ManageProperties = 11,
     ManageCharges = 12,
     ReviewBills = 13,
+    ReportRoomMeterIssues = 14,
+    ReviewRoomMeterIssues = 15,
 }
 
 public enum PropertyType
@@ -111,6 +113,28 @@ public enum CollectionAuditAction
     ReversalRequested = 5,
     ReversalReturned = 6,
     ReversalApproved = 7,
+}
+
+public enum RoomMeterIssueType
+{
+    DamagedMeter = 1,
+    UnreadableMeter = 2,
+    RoomMaintenance = 3,
+    Other = 4,
+}
+
+public enum RoomMeterIssueStatus
+{
+    Open = 1,
+    Acknowledged = 2,
+    Resolved = 3,
+}
+
+public enum RoomMeterIssueAuditAction
+{
+    Reported = 1,
+    Acknowledged = 2,
+    Resolved = 3,
 }
 
 public enum OnboardingStatus

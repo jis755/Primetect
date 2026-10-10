@@ -52,7 +52,8 @@ public static class OrganizationPermissionDefaults
                     OrganizationPermission.SubmitMeterReadings,
                     OrganizationPermission.ViewApprovedBills,
                     OrganizationPermission.ReportCollections,
-                    OrganizationPermission.RequestCollectionReversals);
+                    OrganizationPermission.RequestCollectionReversals,
+                    OrganizationPermission.ReportRoomMeterIssues);
                 break;
             case UserRole.FinanceManager:
                 Enable(permissions,

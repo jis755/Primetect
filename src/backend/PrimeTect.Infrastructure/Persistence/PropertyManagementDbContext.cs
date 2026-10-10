@@ -41,6 +41,10 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<CollectionAuditEntry> CollectionAuditEntries => Set<CollectionAuditEntry>();
 
+    public DbSet<RoomMeterIssue> RoomMeterIssues => Set<RoomMeterIssue>();
+
+    public DbSet<RoomMeterIssueAuditEntry> RoomMeterIssueAuditEntries => Set<RoomMeterIssueAuditEntry>();
+
     public DbSet<OrganizationRolePermission> OrganizationRolePermissions => Set<OrganizationRolePermission>();
 
     public DbSet<OrganizationAuditEntry> OrganizationAuditEntries => Set<OrganizationAuditEntry>();
@@ -281,6 +285,34 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.HasIndex(audit => new { audit.OrganizationId, audit.CollectionReportId, audit.OccurredAtUtc });
             entity.HasOne<CollectionReport>().WithMany().HasForeignKey(audit => audit.CollectionReportId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<CollectionReversal>().WithMany().HasForeignKey(audit => audit.CollectionReversalId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<RoomMeterIssue>(entity =>
+        {
+            entity.ToTable("room_meter_issues");
+            entity.HasKey(issue => issue.Id);
+            entity.Property(issue => issue.IssueType).HasConversion<string>().HasMaxLength(40).IsRequired();
+            entity.Property(issue => issue.Description).HasMaxLength(2000).IsRequired();
+            entity.Property(issue => issue.ObservedDate).HasColumnType("date");
+            entity.Property(issue => issue.Status).HasConversion<string>().HasMaxLength(30).IsRequired();
+            entity.Property(issue => issue.Version).IsConcurrencyToken();
+            entity.Property(issue => issue.ResolutionReason).HasMaxLength(500);
+            entity.HasIndex(issue => new { issue.OrganizationId, issue.PropertyId, issue.UnitId, issue.Status });
+            entity.HasIndex(issue => new { issue.OrganizationId, issue.CreatedAtUtc });
+            entity.HasOne<Property>().WithMany().HasForeignKey(issue => issue.PropertyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Unit>().WithMany().HasForeignKey(issue => issue.UnitId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<RoomMeterIssueAuditEntry>(entity =>
+        {
+            entity.ToTable("room_meter_issue_audit_entries");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.Action).HasConversion<string>().HasMaxLength(30).IsRequired();
+            entity.Property(audit => audit.Reason).HasMaxLength(500);
+            entity.Property(audit => audit.BeforeJson).HasColumnType("text");
+            entity.Property(audit => audit.AfterJson).HasColumnType("text");
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.RoomMeterIssueId, audit.OccurredAtUtc });
+            entity.HasOne<RoomMeterIssue>().WithMany().HasForeignKey(audit => audit.RoomMeterIssueId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

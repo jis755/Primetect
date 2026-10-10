@@ -130,6 +130,90 @@ public sealed record CollectionQueueResponse(
     decimal ConfirmedCollectedTotal,
     decimal OutstandingTotal);
 
+public sealed record CollectionUnitOverviewResponse(
+    Guid UnitId,
+    string UnitName,
+    string? FloorName,
+    Guid? BillingUnitBillId,
+    Guid? OccupancyAssignmentId,
+    Guid? TenantId,
+    string? TenantName,
+    decimal? BilledAmount,
+    decimal ConfirmedCollectedAmount,
+    decimal PendingReportedAmount,
+    decimal PendingReversalAmount,
+    decimal? RemainingBalance,
+    string Status);
+
+public sealed record CollectionOverviewResponse(
+    Guid PropertyId,
+    DateOnly BillingMonth,
+    Guid? BillingCycleId,
+    string BillingCoverage,
+    IReadOnlyList<CollectionUnitOverviewResponse> Units,
+    decimal BilledTotal,
+    decimal PendingReportedTotal,
+    decimal ConfirmedCollectedTotal,
+    decimal OutstandingTotal,
+    decimal PendingReversalTotal);
+
+public sealed record RoomMeterIssueCreateRequest(
+    RoomMeterIssueType IssueType,
+    string Description,
+    DateOnly ObservedDate);
+
+public sealed record RoomMeterIssueActionRequest(long ExpectedVersion, string? Reason);
+
+public sealed record RoomMeterIssueAuditResponse(
+    Guid Id,
+    Guid ActorUserId,
+    RoomMeterIssueAuditAction Action,
+    DateTimeOffset OccurredAtUtc,
+    string? Reason,
+    string? Before,
+    string? After);
+
+public sealed record RoomMeterIssueResponse(
+    Guid Id,
+    Guid PropertyId,
+    Guid UnitId,
+    string UnitName,
+    string? FloorName,
+    Guid ReporterUserId,
+    string ReporterName,
+    RoomMeterIssueType IssueType,
+    string Description,
+    DateOnly ObservedDate,
+    DateTimeOffset CreatedAtUtc,
+    RoomMeterIssueStatus Status,
+    long Version,
+    string? ResolutionReason,
+    IReadOnlyList<RoomMeterIssueAuditResponse> Audit);
+
+public sealed record MeterRoomOverviewResponse(
+    Guid UnitId,
+    string UnitName,
+    string? FloorName,
+    bool ElectricityApplicable,
+    decimal? PreviousReading,
+    DateOnly? PreviousReadingDate,
+    decimal? CurrentReading,
+    DateOnly? CurrentReadingDate,
+    decimal? ConsumptionUnits,
+    decimal? ElectricityAmount,
+    decimal? ElectricityRate,
+    string ReadingStatus,
+    string? BlockingReason,
+    int ReportedIssueCount,
+    int OpenIssueCount);
+
+public sealed record MeterOverviewResponse(
+    Guid PropertyId,
+    DateOnly BillingMonth,
+    Guid? BillingCycleId,
+    string? BillingCycleStatus,
+    IReadOnlyList<MeterRoomOverviewResponse> Units);
+
 public sealed record ApiUserResponse(Guid Id, string Email, string FullName, UserRole Role, Guid OrganizationId);
 
 public sealed record UnitResponse(Guid Id, string Name, bool IsEnabled, bool IsArchived, OccupancyStatus OccupancyStatus);

@@ -61,7 +61,13 @@ public static class PrimeTectEndpointMapping
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/submit", (Delegate)SubmitBillingCycleAsync);
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync);
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/approve", (Delegate)ApproveBillingCycleAsync);
+        secure.MapGet("/properties/{propertyId:guid}/meter-overview/{billingMonth}", (Delegate)GetMeterOverviewAsync);
+        secure.MapGet("/properties/{propertyId:guid}/room-meter-issues", (Delegate)GetRoomMeterIssuesAsync);
+        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/room-meter-issues", (Delegate)CreateRoomMeterIssueAsync);
+        secure.MapPost("/room-meter-issues/{issueId:guid}/acknowledge", (Delegate)AcknowledgeRoomMeterIssueAsync);
+        secure.MapPost("/room-meter-issues/{issueId:guid}/resolve", (Delegate)ResolveRoomMeterIssueAsync);
         secure.MapGet("/properties/{propertyId:guid}/collection-reports/{billingMonth}", (Delegate)GetCollectionReportsAsync);
+        secure.MapGet("/properties/{propertyId:guid}/collection-overview/{billingMonth}", (Delegate)GetCollectionOverviewAsync);
         secure.MapPost("/properties/{propertyId:guid}/collection-reports", (Delegate)CreateCollectionReportAsync);
         secure.MapPut("/collection-reports/{reportId:guid}", (Delegate)CorrectCollectionReportAsync);
         secure.MapPost("/collection-reports/{reportId:guid}/return", (Delegate)ReturnCollectionReportAsync);
@@ -355,6 +361,16 @@ public static class PrimeTectEndpointMapping
             && !Enabled(OrganizationPermission.ViewApprovedBills))
         {
             return "Collection and bill review actions require permission to view approved bills.";
+        }
+
+        if (Enabled(OrganizationPermission.ReportRoomMeterIssues) && !Enabled(OrganizationPermission.ViewAssignedProperties))
+        {
+            return "Reporting room or meter issues requires permission to view assigned properties.";
+        }
+
+        if (Enabled(OrganizationPermission.ReviewRoomMeterIssues) && !Enabled(OrganizationPermission.ViewAssignedProperties))
+        {
+            return "Reviewing room or meter issues requires permission to view assigned properties.";
         }
 
         return null;
@@ -2077,6 +2093,388 @@ public static class PrimeTectEndpointMapping
         return Results.Ok(await ToCollectionQueueResponseAsync(db, rows, approvedBills, cancellationToken));
     }
 
+    private static async Task<IResult> GetMeterOverviewAsync(
+        Guid propertyId,
+        DateOnly billingMonth,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewMeterReadings, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return Results.NotFound();
+        }
+
+        var cycle = await db.BillingCycles.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId
+            && item.PropertyId == propertyId
+            && item.BillingMonth == billingMonth, cancellationToken);
+        var units = await (
+            from unit in db.Units.AsNoTracking()
+            join floor in db.Floors.AsNoTracking() on unit.FloorId equals floor.Id
+            where unit.OrganizationId == actor.OrganizationId
+                && unit.PropertyId == propertyId
+                && unit.IsEnabled
+                && !unit.IsArchived
+            orderby floor.SortOrder, unit.Name
+            select new { unit.Id, unit.Name, FloorName = floor.Name, FloorSortOrder = floor.SortOrder })
+            .ToListAsync(cancellationToken);
+
+        var configurations = cycle is null
+            ? await db.ChargeConfigurations.AsNoTracking()
+                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+                .ToListAsync(cancellationToken)
+            : [];
+        var bills = cycle is null
+            ? []
+            : await db.BillingUnitBills.AsNoTracking().Where(item => item.BillingCycleId == cycle.Id).ToListAsync(cancellationToken);
+        var billIds = bills.Select(item => item.Id).ToArray();
+        var lines = billIds.Length == 0
+            ? []
+            : await db.BillingChargeLines.AsNoTracking().Where(item => billIds.Contains(item.BillingUnitBillId)).ToListAsync(cancellationToken);
+        var issueCounts = await db.RoomMeterIssues.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+            .GroupBy(item => item.UnitId)
+            .Select(group => new { UnitId = group.Key, Total = group.Count(), Open = group.Count(item => item.Status != RoomMeterIssueStatus.Resolved) })
+            .ToDictionaryAsync(item => item.UnitId, cancellationToken);
+
+        var billByUnit = bills.ToDictionary(item => item.UnitId);
+        var lineByBill = lines.GroupBy(item => item.BillingUnitBillId).ToDictionary(group => group.Key, group => group.ToList());
+        var response = units.Select(unit =>
+        {
+            billByUnit.TryGetValue(unit.Id, out var bill);
+            var meter = bill is null
+                ? null
+                : lineByBill.GetValueOrDefault(bill.Id)?.FirstOrDefault(item => item.IsMetered && item.ChargeType == ChargeType.Electricity);
+            var configuredElectricity = bill is null
+                ? ResolveEffectiveCharges(configurations, unit.Id, billingMonth).FirstOrDefault(item => item.ChargeType == ChargeType.Electricity)
+                : null;
+            var applicable = meter is not null || configuredElectricity is not null;
+            var issue = issueCounts.GetValueOrDefault(unit.Id);
+            return new MeterRoomOverviewResponse(
+                unit.Id,
+                unit.Name,
+                unit.FloorName,
+                applicable,
+                meter?.PreviousReading,
+                meter?.PreviousReadingDate,
+                meter?.CurrentReading,
+                meter?.CurrentReadingDate,
+                meter?.ConsumptionUnits,
+                meter?.Amount,
+                meter?.RateSnapshot ?? configuredElectricity?.Amount,
+                MeterReadingStatus(cycle?.Status, applicable, meter?.CurrentReading),
+                bill?.BlockingReason,
+                issue?.Total ?? 0,
+                issue?.Open ?? 0);
+        }).ToList();
+
+        return Results.Ok(new MeterOverviewResponse(propertyId, billingMonth, cycle?.Id, cycle?.Status.ToString(), response));
+    }
+
+    private static async Task<IResult> GetCollectionOverviewAsync(
+        Guid propertyId,
+        DateOnly billingMonth,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewApprovedBills, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return Results.NotFound();
+        }
+
+        var approvedCycle = await db.BillingCycles.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId
+            && item.PropertyId == propertyId
+            && item.BillingMonth == billingMonth
+            && item.Status == BillingCycleStatus.Approved, cancellationToken);
+        var anyCycle = approvedCycle is not null || await db.BillingCycles.AsNoTracking().AnyAsync(item =>
+            item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.BillingMonth == billingMonth, cancellationToken);
+        var units = await (
+            from unit in db.Units.AsNoTracking()
+            join floor in db.Floors.AsNoTracking() on unit.FloorId equals floor.Id
+            where unit.OrganizationId == actor.OrganizationId
+                && unit.PropertyId == propertyId
+                && unit.IsEnabled
+                && !unit.IsArchived
+            orderby floor.SortOrder, unit.Name
+            select new { unit.Id, unit.Name, FloorName = floor.Name, FloorSortOrder = floor.SortOrder })
+            .ToListAsync(cancellationToken);
+
+        var bills = approvedCycle is null
+            ? []
+            : await db.BillingUnitBills.AsNoTracking().Where(item => item.BillingCycleId == approvedCycle.Id).ToListAsync(cancellationToken);
+        var billIds = bills.Select(item => item.Id).ToArray();
+        var reports = billIds.Length == 0
+            ? []
+            : await db.CollectionReports.AsNoTracking().Where(item => billIds.Contains(item.BillingUnitBillId)).ToListAsync(cancellationToken);
+        var reportIds = reports.Select(item => item.Id).ToArray();
+        var reversals = reportIds.Length == 0
+            ? []
+            : await db.CollectionReversals.AsNoTracking().Where(item => reportIds.Contains(item.CollectionReportId)).ToListAsync(cancellationToken);
+        var approvedReversalIds = reversals.Where(item => item.Status == CollectionReversalStatus.Approved).Select(item => item.CollectionReportId).ToHashSet();
+        var pendingReversalIds = reversals.Where(item => item.Status == CollectionReversalStatus.Pending).Select(item => item.CollectionReportId).ToHashSet();
+        var billByUnit = bills.ToDictionary(item => item.UnitId);
+        var reportsByBill = reports.GroupBy(item => item.BillingUnitBillId).ToDictionary(group => group.Key, group => group.ToList());
+        var rows = units.Select(unit =>
+        {
+            billByUnit.TryGetValue(unit.Id, out var bill);
+            var billReports = bill is null ? [] : reportsByBill.GetValueOrDefault(bill.Id) ?? [];
+            var confirmed = billReports.Where(item => item.Status == CollectionReportStatus.Approved && !approvedReversalIds.Contains(item.Id)).Sum(item => item.AmountReceived);
+            var pending = billReports.Where(item => item.Status is CollectionReportStatus.Pending or CollectionReportStatus.Returned).Sum(item => item.AmountReceived);
+            var pendingReversal = billReports.Where(item => pendingReversalIds.Contains(item.Id)).Sum(item => item.AmountReceived);
+            var remaining = bill is null ? (decimal?)null : Math.Max(0m, bill.Total - confirmed);
+            return new CollectionUnitOverviewResponse(
+                unit.Id,
+                unit.Name,
+                unit.FloorName,
+                bill?.Id,
+                bill?.OccupancyAssignmentId,
+                bill?.TenantId,
+                bill?.TenantNameSnapshot,
+                bill?.Total,
+                confirmed,
+                pending,
+                pendingReversal,
+                remaining,
+                CollectionStatus(bill, confirmed, pending));
+        }).ToList();
+
+        return Results.Ok(new CollectionOverviewResponse(
+            propertyId,
+            billingMonth,
+            approvedCycle?.Id,
+            approvedCycle is not null ? "Approved" : anyCycle ? "Unapproved" : "Missing",
+            rows,
+            bills.Sum(item => item.Total),
+            rows.Sum(item => item.PendingReportedAmount),
+            rows.Sum(item => item.ConfirmedCollectedAmount),
+            rows.Where(item => item.RemainingBalance is not null).Sum(item => item.RemainingBalance!.Value),
+            rows.Sum(item => item.PendingReversalAmount)));
+    }
+
+    private static async Task<IResult> GetRoomMeterIssuesAsync(
+        Guid propertyId,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var canView = await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewMeterReadings, cancellationToken);
+        var canReview = actor.IsAdmin || await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewRoomMeterIssues, cancellationToken);
+        if (!canView && !canReview)
+        {
+            return Results.Forbid();
+        }
+
+        if (await AccessibleProperties(db, actor, includeArchived: false).AsNoTracking().FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        var issues = await db.RoomMeterIssues.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && (canReview || item.ReporterUserId == actor.UserId))
+            .OrderByDescending(item => item.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+        var responses = new List<RoomMeterIssueResponse>(issues.Count);
+        foreach (var issue in issues)
+        {
+            responses.Add(await ToRoomMeterIssueResponseAsync(db, issue, cancellationToken));
+        }
+
+        return Results.Ok(responses);
+    }
+
+    private static async Task<IResult> CreateRoomMeterIssueAsync(
+        Guid propertyId,
+        Guid unitId,
+        RoomMeterIssueCreateRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReportRoomMeterIssues, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        var unit = property is null ? null : await AccessibleUnitAsync(db, actor, propertyId, unitId, cancellationToken);
+        if (property is null || unit is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (!Enum.IsDefined(request.IssueType))
+        {
+            return BadRequest("A supported room or meter issue type is required.");
+        }
+
+        if (request.ObservedDate > PropertyLocalDate(property.TimeZoneId))
+        {
+            return BadRequest("The observed date cannot be in the future for this property.");
+        }
+
+        RoomMeterIssue issue;
+        try
+        {
+            issue = new RoomMeterIssue(actor.OrganizationId, propertyId, unitId, actor.UserId, request.IssueType, request.Description, request.ObservedDate);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.RoomMeterIssues.Add(issue);
+            db.RoomMeterIssueAuditEntries.Add(new RoomMeterIssueAuditEntry(
+                actor.OrganizationId,
+                issue.Id,
+                actor.UserId,
+                RoomMeterIssueAuditAction.Reported,
+                null,
+                null,
+                JsonSerializer.Serialize(RoomMeterIssueSnapshot(issue))));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Created($"/api/room-meter-issues/{issue.Id}", await ToRoomMeterIssueResponseAsync(db, issue, cancellationToken));
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The issue report could not be saved. No meter or billing data was changed.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static Task<IResult> AcknowledgeRoomMeterIssueAsync(
+        Guid issueId,
+        RoomMeterIssueActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken) => ChangeRoomMeterIssueAsync(issueId, request, false, httpContext, db, cancellationToken);
+
+    private static Task<IResult> ResolveRoomMeterIssueAsync(
+        Guid issueId,
+        RoomMeterIssueActionRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken) => ChangeRoomMeterIssueAsync(issueId, request, true, httpContext, db, cancellationToken);
+
+    private static async Task<IResult> ChangeRoomMeterIssueAsync(
+        Guid issueId,
+        RoomMeterIssueActionRequest request,
+        bool resolve,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewRoomMeterIssues, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var issue = await db.RoomMeterIssues.FirstOrDefaultAsync(item => item.Id == issueId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (issue is null || await AccessibleProperties(db, actor, includeArchived: false).AllAsync(item => item.Id != issue.PropertyId, cancellationToken))
+        {
+            return Results.NotFound();
+        }
+
+        if (issue.Version != request.ExpectedVersion)
+        {
+            return Results.Conflict(new { message = "This issue changed since it was loaded. Refresh before trying again." });
+        }
+
+        var before = RoomMeterIssueSnapshot(issue);
+        try
+        {
+            if (resolve)
+            {
+                issue.Resolve(actor.UserId, request.Reason ?? string.Empty);
+            }
+            else
+            {
+                issue.Acknowledge(actor.UserId, request.Reason);
+            }
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.RoomMeterIssueAuditEntries.Add(new RoomMeterIssueAuditEntry(
+                actor.OrganizationId,
+                issue.Id,
+                actor.UserId,
+                resolve ? RoomMeterIssueAuditAction.Resolved : RoomMeterIssueAuditAction.Acknowledged,
+                request.Reason,
+                JsonSerializer.Serialize(before),
+                JsonSerializer.Serialize(RoomMeterIssueSnapshot(issue))));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Ok(await ToRoomMeterIssueResponseAsync(db, issue, cancellationToken));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This issue changed since it was loaded. Refresh before trying again." });
+        }
+    }
+
     private static async Task<IResult> CreateCollectionReportAsync(
         Guid propertyId,
         CollectionReportCreateRequest request,
@@ -2844,6 +3242,110 @@ public static class PrimeTectEndpointMapping
             .Select(item => (decimal?)item.AmountReceived)
             .SumAsync(cancellationToken) ?? 0m;
     }
+
+    private static string MeterReadingStatus(BillingCycleStatus? cycleStatus, bool electricityApplicable, decimal? currentReading)
+    {
+        if (!electricityApplicable)
+        {
+            return "NotApplicable";
+        }
+
+        return cycleStatus switch
+        {
+            BillingCycleStatus.Submitted => "AwaitingReview",
+            BillingCycleStatus.Approved => "Approved",
+            BillingCycleStatus.Returned => currentReading is null ? "Missing" : "Returned",
+            BillingCycleStatus.Draft => currentReading is null ? "Missing" : "SavedDraft",
+            _ => "NoDraft",
+        };
+    }
+
+    private static string CollectionStatus(BillingUnitBill? bill, decimal confirmed, decimal pending)
+    {
+        if (bill is null)
+        {
+            return "NoApprovedBill";
+        }
+
+        if (pending > 0m)
+        {
+            return "PendingApproval";
+        }
+
+        if (confirmed <= 0m)
+        {
+            return "Outstanding";
+        }
+
+        return confirmed >= bill.Total ? "FullyCollected" : "PartiallyCollected";
+    }
+
+    private static DateOnly PropertyLocalDate(string timeZoneId)
+    {
+        try
+        {
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return DateOnly.FromDateTime(DateTime.UtcNow);
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return DateOnly.FromDateTime(DateTime.UtcNow);
+        }
+    }
+
+    private static async Task<RoomMeterIssueResponse> ToRoomMeterIssueResponseAsync(
+        PropertyManagementDbContext db,
+        RoomMeterIssue issue,
+        CancellationToken cancellationToken)
+    {
+        var unit = await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == issue.UnitId, cancellationToken);
+        var floorName = unit is null
+            ? null
+            : await db.Floors.AsNoTracking().Where(item => item.Id == unit.FloorId).Select(item => item.Name).FirstOrDefaultAsync(cancellationToken);
+        var reporterName = await db.Users.AsNoTracking()
+            .Where(item => item.Id == issue.ReporterUserId && item.OrganizationId == issue.OrganizationId)
+            .Select(item => item.FullName)
+            .FirstOrDefaultAsync(cancellationToken) ?? "Unknown reporter";
+        var audit = await db.RoomMeterIssueAuditEntries.AsNoTracking()
+            .Where(item => item.RoomMeterIssueId == issue.Id)
+            .OrderBy(item => item.OccurredAtUtc)
+            .Select(item => new RoomMeterIssueAuditResponse(item.Id, item.ActorUserId, item.Action, item.OccurredAtUtc, item.Reason, item.BeforeJson, item.AfterJson))
+            .ToListAsync(cancellationToken);
+        return new RoomMeterIssueResponse(
+            issue.Id,
+            issue.PropertyId,
+            issue.UnitId,
+            unit?.Name ?? "Unknown unit",
+            floorName,
+            issue.ReporterUserId,
+            reporterName,
+            issue.IssueType,
+            issue.Description,
+            issue.ObservedDate,
+            issue.CreatedAtUtc,
+            issue.Status,
+            issue.Version,
+            issue.ResolutionReason,
+            audit);
+    }
+
+    private static object RoomMeterIssueSnapshot(RoomMeterIssue issue) => new
+    {
+        issue.Id,
+        issue.PropertyId,
+        issue.UnitId,
+        issue.ReporterUserId,
+        issue.IssueType,
+        issue.Description,
+        issue.ObservedDate,
+        issue.Status,
+        issue.Version,
+        issue.ResolutionReason,
+    };
 
     private static async Task<BillingUnitBill?> LockBillingUnitBillAsync(PropertyManagementDbContext db, Guid billingUnitBillId, CancellationToken cancellationToken)
     {

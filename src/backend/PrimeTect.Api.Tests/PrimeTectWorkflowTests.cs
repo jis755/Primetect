@@ -292,6 +292,8 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
 
         defaults["ViewMeterReadings"] = true;
         defaults["ViewAssignedProperties"] = false;
+        defaults["ReportRoomMeterIssues"] = false;
+        defaults["ReviewRoomMeterIssues"] = false;
         var saved = await admin.PutAsJsonAsync("/api/role-permissions", new { role = "Manager", permissions = defaults, reason = "Revoke property visibility" });
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
 

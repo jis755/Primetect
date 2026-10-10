@@ -136,7 +136,7 @@ Manual review checklist:
 ### Fresh guided-entry demo
 
 The current checkpoint also has a new isolated synthetic demo database:
-`primetect_demo_guided_20261010_da3c89c`. It was created from empty and all seven committed migrations were applied
+`primetect_demo_guided_20261010_da3c89c`. It was created from empty and all eight committed migrations were applied
 to it. It is separate from both `primetect` and the earlier collection demo. It contains unequal Ground/Upper floors,
 mixed fixed and metered charges, inherited/custom/disabled examples, a named tenant occupying multiple units, an
 unnamed occupancy, two consecutive approved billing months (September and October 2026), and one pending cash
@@ -197,7 +197,7 @@ Run these commands one at a time to limit memory use. The normal API workflow te
 
 ### Disposable PostgreSQL verification
 
-The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all seven committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
+The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all eight committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
 
 PowerShell example (use a local password only; do not put this value in a tracked file):
 
@@ -238,13 +238,21 @@ Properties use the configured `TimeZoneId` when initializing today/month in the 
 
 Monthly billing intentionally blocks unresolved policy cases instead of inventing allocations: mid-month tenant changes/partial-month charges, vacant-unit charges, and any cycle without a contiguous immediately preceding approved period require explicit review. Meter resets or replacements are not bypassed by the opening-reading field and need a separate documented workflow. Email delivery, email verification, two-factor authentication, billing collection/payment actions, SafeDocs integration, SMS, police actions, and deployment are not implemented.
 
+### Collection entry, issue reports, and room overviews
+
+Collection entry uses the current reportable remaining balance: approved billed amount minus confirmed collections net of approved reversals. Pending or returned reports remain visible but do not reduce that balance; a full receipt means the current remaining amount, not the original bill total. Whole and two-decimal values such as `199`, `199.00`, and `198.01` are accepted. API validation is rendered as plain UI messages, and failed submissions keep the entered value.
+
+Meter Readings has a separate **Report a room/meter issue / রুম বা মিটারের সমস্যা জানান** action. It stores the assigned property/unit, issue type, description, property-local observed date, reporter, server timestamp, status, and audit history without saving or changing a reading, bill, or collection. Staff can report assigned-unit issues; Admins or explicitly enabled reviewers can acknowledge or resolve them. Damaged-meter reports never fabricate readings or reset meters.
+
+Meter and collection screens include a property/month **View all rooms** overview. Every accessible enabled unit appears once; fixed-charge-only units are marked Not applicable and are not counted as missing. Reading filters distinguish missing, saved draft, awaiting review, returned, approved, and reported issues. Collection rows distinguish no approved bill, pending reports, confirmed collections, pending reversals, and confirmed outstanding balances; historical occupancy references are not transferred.
+
 ### Meter reading month convention
 
 The selected billing month is the month in which the bill is issued. Meter consumption is calculated from the immediately preceding approved period's current reading (or an explicitly entered opening reading when no approved predecessor exists) to the selected cycle's current reading. For example, a reading of 10020 on 1 January 2026 and 10040 on 1 February 2026 is 20 units on the February-issued bill; it is not silently treated as January usage. Reading dates are stored when supplied. Legacy rows without stored dates display “Reading date unavailable.” Missing approved periods remain a gap and never become zero or cumulative multi-month usage.
 
 Electricity amount is rounded to two decimal places using the existing away-from-zero money rule. A low-bill warning is informational only and appears strictly below the effective threshold; the initial default is Tk200, so Tk199 warns while Tk200 does not. It never adds a minimum fee and does not block approval.
 
-The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, and `PropertyTimeZone` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
+The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, and `RoomMeterIssues` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
 
 ## npm audit review
 

@@ -55,6 +55,33 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
         var approved = await ReadAsync<BillingCycleResponse>(await secondAdmin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{draft.Id}/approve", new { expectedVersion = submitted.Version }));
         Assert.Equal(BillingCycleStatus.Approved, approved.Status);
 
+        using var issueReporter = factory.CreateClient();
+        var issueReporterInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"issue-reporter-{suffix}@example.test", role = "Manager" }));
+        var issueReporterUser = await AcceptInvitationAsync(issueReporter, issueReporterInvitation.InvitationToken, "Issue Reporter");
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{issueReporterUser.Id}", null)).StatusCode);
+        var issue = await ReadAsync<RoomMeterIssueResponse>(await issueReporter.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unit.Id}/room-meter-issues", new
+        {
+            issueType = "DamagedMeter",
+            description = "Synthetic test issue; no reading supplied.",
+            observedDate = "2026-01-10",
+        }));
+        Assert.Equal(RoomMeterIssueStatus.Open, issue.Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await financeGetIssueClientAsync()).StatusCode);
+        var meterOverview = await ReadAsync<MeterOverviewResponse>(await admin.GetAsync($"/api/properties/{property.Id}/meter-overview/2026-01"));
+        Assert.Equal(1, meterOverview.Units.Single().ReportedIssueCount);
+        var collectionOverview = await ReadAsync<CollectionOverviewResponse>(await admin.GetAsync($"/api/properties/{property.Id}/collection-overview/2026-01"));
+        Assert.Equal("Approved", collectionOverview.BillingCoverage);
+        Assert.Equal(300m, collectionOverview.Units.Single().RemainingBalance);
+
+        async Task<HttpResponseMessage> financeGetIssueClientAsync()
+        {
+            using var financeWithoutIssuePermission = factory.CreateClient();
+            var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"issue-finance-{suffix}@example.test", role = "FinanceManager" }));
+            var user = await AcceptInvitationAsync(financeWithoutIssuePermission, invitation.InvitationToken, "Issue Finance");
+            Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{user.Id}", null)).StatusCode);
+            return await financeWithoutIssuePermission.GetAsync($"/api/properties/{property.Id}/room-meter-issues");
+        }
+
         using var manager = factory.CreateClient();
         var managerInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"building-manager-{suffix}@example.test", role = "Manager" }));
         var managerUser = await AcceptInvitationAsync(manager, managerInvitation.InvitationToken, "Building Manager");
@@ -234,4 +261,10 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
     private sealed record CollectionReportResponse(Guid Id, Guid BillingUnitBillId, Guid BillingCycleId, Guid PropertyId, DateOnly BillingMonth, Guid UnitId, string UnitName, string? FloorName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, decimal BilledAmount, decimal ConfirmedCollectedAmount, decimal RemainingBalance, decimal AmountReceived, DateOnly ReceivedDate, PaymentMethod PaymentMethod, string? ReferenceNote, Guid ReporterUserId, string ReporterName, DateTimeOffset SubmittedAtUtc, CollectionReportStatus Status, long Version, string? ReturnReason, Guid? ApprovedByUserId, DateTimeOffset? ApprovedAtUtc, bool IsReversed, CollectionReversalStatus? ReversalStatus, Guid? ReversalId, long? ReversalVersion, string? ReversalReason, List<CollectionAuditResponse> Audit);
     private sealed record CollectionAuditResponse(Guid Id, Guid? CollectionReversalId, Guid ActorUserId, CollectionAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
     private sealed record CollectionQueueResponse(List<CollectionReportResponse> Items, decimal BilledTotal, decimal PendingReportedTotal, decimal ConfirmedCollectedTotal, decimal OutstandingTotal);
+    private sealed record MeterOverviewResponse(Guid PropertyId, DateOnly BillingMonth, Guid? BillingCycleId, BillingCycleStatus? BillingCycleStatus, List<MeterRoomOverviewResponse> Units);
+    private sealed record MeterRoomOverviewResponse(Guid UnitId, string UnitName, string? FloorName, bool ElectricityApplicable, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, decimal? ElectricityAmount, decimal? ElectricityRate, string ReadingStatus, string? BlockingReason, int ReportedIssueCount, int OpenIssueCount);
+    private sealed record CollectionOverviewResponse(Guid PropertyId, DateOnly BillingMonth, Guid? BillingCycleId, string BillingCoverage, List<CollectionUnitOverviewResponse> Units, decimal BilledTotal, decimal PendingReportedTotal, decimal ConfirmedCollectedTotal, decimal OutstandingTotal, decimal PendingReversalTotal);
+    private sealed record CollectionUnitOverviewResponse(Guid UnitId, string UnitName, string? FloorName, Guid? BillingUnitBillId, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, decimal? BilledAmount, decimal ConfirmedCollectedAmount, decimal PendingReportedAmount, decimal PendingReversalAmount, decimal? RemainingBalance, string Status);
+    private sealed record RoomMeterIssueResponse(Guid Id, Guid PropertyId, Guid UnitId, string UnitName, string? FloorName, Guid ReporterUserId, string ReporterName, RoomMeterIssueType IssueType, string Description, DateOnly ObservedDate, DateTimeOffset CreatedAtUtc, RoomMeterIssueStatus Status, long Version, string? ResolutionReason, List<RoomMeterIssueAuditResponse> Audit);
+    private sealed record RoomMeterIssueAuditResponse(Guid Id, Guid ActorUserId, RoomMeterIssueAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
 }
