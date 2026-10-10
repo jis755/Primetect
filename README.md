@@ -507,6 +507,12 @@ The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `Printable
 
 ### Simplified workspace navigation
 
+The daily staff/manager landing screen is **My Work / আমার কাজ**. It keeps one property and billing-month context visible and shows only task cards allowed by the effective permissions: **Enter Meter Reading / মিটার রিডিং লিখুন**, **Report Money Received / পাওয়া টাকার হিসাব দিন**, and **Feedback / Report / ফিডব্যাক / রিপোর্ট**. **View All Rooms / সব রুম দেখুন** is secondary. Multiple assigned properties must be selected explicitly; the UI never silently chooses the first property. Reading progress is an applicable-metered-unit count, not a count of visible filtered rows.
+
+The focused room screen saves one reading through the existing draft endpoint and advances only after the server confirms success. It does not submit a month. **Submit for review** is available only in the room overview/monthly submission area, where the server's existing blockers and approval granularity remain authoritative. Collection reporting is separate from review/history: a submitted receipt is **Pending approval**, while only an approved report is **Confirmed received**.
+
+Authentication offers **Log in**, **Create account / Register**, and **Accept staff invitation**. Public registration creates a new organization and its first Admin through the existing owner-registration endpoint; it cannot select an existing organization or privileged staff role. Staff join an existing organization only with the secure one-time invitation flow. Invitation/email delivery is not implemented, so an Admin must share the token manually. Successful owner registration opens the existing property setup workflow; it does not create demo properties or tenants.
+
 The signed-in home uses the effective organization permissions returned by `/api/auth/me`; role names are labels, not
 authorization. Staff and Building Managers get the permitted task cards for **Enter meter reading / মিটার রিডিং লিখুন**,
 **Report money received / পাওয়া টাকার হিসাব দিন**, and **Report a problem / সমস্যা জানান**, with **View all rooms / সব

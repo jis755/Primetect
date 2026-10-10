@@ -32,3 +32,30 @@ export function summarizeMeterProgress(units: MeterProgressUnit[]) {
     approved: applicable.filter((unit) => unit.readingStatus === "Approved").length,
   };
 }
+
+export type StaffTaskPermissions = {
+  viewMeterReadings: boolean;
+  reportCollections: boolean;
+  reportRoomMeterIssues: boolean;
+};
+
+export function visibleStaffTasks(permissions: StaffTaskPermissions) {
+  return {
+    meter: permissions.viewMeterReadings,
+    collections: permissions.reportCollections,
+    feedback: permissions.reportRoomMeterIssues,
+    rooms: permissions.viewMeterReadings,
+  };
+}
+
+export function monthlySubmissionLocation(location: "entry" | "overview") {
+  return location === "overview";
+}
+
+export function collectionBillDisplay(billedAmount: number | null) {
+  return billedAmount === null ? "No approved bill" : `Tk ${billedAmount.toFixed(2)} billed`;
+}
+
+export function preserveWorkflowContext<T extends { propertyId: string; billingMonth: string; unitId?: string; language: "en" | "bn" }, L extends "en" | "bn">(context: T, language: L): Omit<T, "language"> & { language: L } {
+  return { ...context, language } as Omit<T, "language"> & { language: L };
+}

@@ -3,7 +3,7 @@
 import { ApiHealth } from "@/components/api-health";
 import { LanguageProvider, useLanguage } from "@/components/language";
 import { ApiError, apiFetch } from "@/lib/api";
-import { nextMeterRoomIndex, summarizeMeterProgress } from "@/lib/workspace-ui-logic";
+import { nextMeterRoomIndex, summarizeMeterProgress, visibleStaffTasks } from "@/lib/workspace-ui-logic";
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -137,11 +137,35 @@ function DashboardWorkspaceContent() {
   useEffect(() => { apiFetch<Session>("/api/auth/me").then(setSession).catch(() => setSession(null)).finally(() => setLoading(false)); }, []);
   const { text } = useLanguage();
   if (loading) return <CenteredState label={text("Loading your PrimeTect workspace…", "আপনার PrimeTect ওয়ার্কস্পেস লোড হচ্ছে…")} />;
-  if (!session) return <AuthScreen mode={mode} onModeChange={setMode} onAuthenticated={(next) => { setError(""); setMessage(""); setSession(next); }} onError={setError} />;
+  if (!session) return <AuthScreen mode={mode} error={error} onModeChange={setMode} onAuthenticated={(next) => { setError(""); setMessage(""); setSession(next); }} onError={setError} />;
   return <Workspace session={session} message={message} error={error} onMessage={setMessage} onError={setError} onLogout={async () => { await apiFetch<void>("/api/auth/logout", { method: "POST" }); setSession(null); setMode("login"); }} />;
 }
 
-function AuthScreen({ mode, onModeChange, onAuthenticated, onError }: { mode: "login" | "register" | "accept"; onModeChange: (mode: "login" | "register" | "accept") => void; onAuthenticated: (session: Session) => void; onError: (message: string) => void }) {
+function AuthScreen({ mode, error, onModeChange, onAuthenticated, onError }: { mode: "login" | "register" | "accept"; error: string; onModeChange: (mode: "login" | "register" | "accept") => void; onAuthenticated: (session: Session) => void; onError: (message: string) => void }) {
+  const [form, setForm] = useState({ organizationName: "", fullName: "", email: "", password: "", token: "" });
+  const [busy, setBusy] = useState(false);
+  const { text, error: localizedError } = useLanguage();
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onError("");
+    setBusy(true);
+    try {
+      if (mode === "login") await apiFetch<User>("/api/auth/login", { method: "POST", body: JSON.stringify({ email: form.email, password: form.password }) });
+      else if (mode === "register") await apiFetch("/api/auth/register-owner", { method: "POST", body: JSON.stringify({ organizationName: form.organizationName, fullName: form.fullName, email: form.email, password: form.password }) });
+      else await apiFetch("/api/auth/accept-invitation", { method: "POST", body: JSON.stringify({ token: form.token, fullName: form.fullName, password: form.password }) });
+      onAuthenticated(await apiFetch<Session>("/api/auth/me"));
+    } catch (caught) {
+      onError(localizedError(caught, text("We could not complete that request.", "অনুরোধটি সম্পন্ন করা যায়নি।")));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="min-h-screen bg-sand px-6 py-8 sm:px-10 lg:px-14"><div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-5xl flex-col justify-center"><div className="flex items-center justify-between gap-4"><BrandMark /><ApiHealth /></div><div className="mt-8 grid gap-8 lg:grid-cols-[1fr_0.8fr] lg:items-center"><div><p className="text-xs font-bold uppercase tracking-[0.28em] text-pine">{text("Property operations, made clear", "সম্পত্তির কাজ, সহজভাবে")}</p><h1 className="mt-4 max-w-xl text-5xl font-black leading-[0.98] tracking-[-0.07em] text-ink sm:text-7xl">{text("A better day for every property team.", "প্রতিটি সম্পত্তি দলের জন্য সহজ দিন।")}</h1><p className="mt-6 max-w-lg text-lg leading-8 text-ink/60">{mode === "register" ? text("Create a new organization and become its first Admin. You can add properties next.", "নতুন সংস্থা তৈরি করে প্রথম অ্যাডমিন হন। এরপর সম্পত্তি যোগ করতে পারবেন।") : mode === "accept" ? text("Join the organization named in your secure one-time staff invitation.", "নিরাপদ একবারের স্টাফ আমন্ত্রণ দিয়ে নির্দিষ্ট সংস্থায় যোগ দিন।") : text("Sign in to continue your PrimeTect work.", "PrimeTect-এর কাজে যেতে সাইন ইন করুন।")}</p></div><form onSubmit={submit} className="rounded-[2rem] border border-ink/10 bg-white/85 p-6 shadow-soft sm:p-8"><div className="flex flex-wrap gap-4 border-b border-ink/10 text-sm font-bold"><AuthTab active={mode === "login"} onClick={() => onModeChange("login")}>{text("Log in", "সাইন ইন")}</AuthTab><AuthTab active={mode === "register"} onClick={() => onModeChange("register")}>{text("Create account", "অ্যাকাউন্ট তৈরি করুন")}</AuthTab><AuthTab active={mode === "accept"} onClick={() => onModeChange("accept")}>{text("Accept staff invitation", "স্টাফ আমন্ত্রণ গ্রহণ করুন")}</AuthTab></div><h2 className="mt-7 text-2xl font-black tracking-[-0.05em] text-ink">{mode === "login" ? text("Welcome back", "আবার স্বাগতম") : mode === "register" ? text("Create your account", "আপনার অ্যাকাউন্ট তৈরি করুন") : text("Join your organization", "আপনার সংস্থায় যোগ দিন")}</h2><p className="mt-2 text-sm leading-6 text-ink/60">{mode === "login" ? text("Use the email and password provided for your account.", "আপনার অ্যাকাউন্টের ইমেইল ও পাসওয়ার্ড ব্যবহার করুন।") : mode === "register" ? text("This creates a separate organization and its first Admin account. It cannot select an existing organization or privileged staff role.", "এটি আলাদা সংস্থা ও প্রথম অ্যাডমিন অ্যাকাউন্ট তৈরি করে। এখানে পুরোনো সংস্থা বা বিশেষ স্টাফ ভূমিকা বেছে নেওয়া যায় না।") : text("Email delivery is not connected. Paste the one-time token shared manually by an Admin.", "ইমেইল পাঠানো হয় না। অ্যাডমিনের কাছ থেকে পাওয়া একবারের টোকেন দিন।")}</p>{error && <p role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm font-semibold text-rose-800">{error}</p>}<div className="mt-5 space-y-3">{mode === "register" && <Field label={text("Organization name", "সংস্থার নাম")} value={form.organizationName} onChange={(value) => setForm({ ...form, organizationName: value })} placeholder="Northstar Property Group" required />}{mode !== "login" && <Field label={text("Your full name", "আপনার পূর্ণ নাম")} value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} placeholder={text("Amina Rahman", "আমিনা রহমান")} required />}{mode === "accept" ? <Field label={text("Invitation token", "আমন্ত্রণ টোকেন")} value={form.token} onChange={(value) => setForm({ ...form, token: value })} placeholder={text("Paste the secure one-time token", "নিরাপদ একবারের টোকেন দিন")} required /> : <Field label={text("Email", "ইমেইল")} type="email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} placeholder="you@example.com" required />}<Field label={text("Password", "পাসওয়ার্ড")} type="password" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder={text("10+ characters, mixed case and a symbol", "১০ বা তার বেশি অক্ষর, বড়-ছোট অক্ষর ও প্রতীক")} required /></div><button type="submit" disabled={busy} className="mt-5 min-h-12 w-full rounded-2xl bg-pine px-5 py-3.5 text-base font-bold text-white transition hover:bg-ink disabled:cursor-wait disabled:opacity-60">{busy ? text("Working…", "কাজ হচ্ছে…") : mode === "login" ? text("Log in", "সাইন ইন") : mode === "register" ? text("Create account", "অ্যাকাউন্ট তৈরি করুন") : text("Accept invitation", "আমন্ত্রণ গ্রহণ করুন")}</button></form></div></div></main>;
+}
+
+function LegacyAuthScreen({ mode, onModeChange, onAuthenticated, onError }: { mode: "login" | "register" | "accept"; onModeChange: (mode: "login" | "register" | "accept") => void; onAuthenticated: (session: Session) => void; onError: (message: string) => void }) {
   const [form, setForm] = useState({ organizationName: "", fullName: "", email: "", password: "", token: "" });
   const [busy, setBusy] = useState(false);
   const { error: localizedError } = useLanguage();
@@ -192,7 +216,7 @@ function UnusedWorkspace({ session, message, error, onMessage, onError, onLogout
 }
 
 function Workspace({ session, message, error, onMessage, onError, onLogout }: { session: Session; message: string; error: string; onMessage: (message: string) => void; onError: (message: string) => void; onLogout: () => Promise<void> }) {
-  const { text, error: localizedError } = useLanguage();
+  const { language, text, error: localizedError } = useLanguage();
   const [properties, setProperties] = useState<Property[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -206,6 +230,7 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
   const canManageProperties = isAdmin || hasPermission(session, "ManageProperties");
   const canManageTenants = isAdmin || hasPermission(session, "ManageTenants");
   const canReportIssues = isAdmin || hasPermission(session, "ReportRoomMeterIssues");
+  const simpleStaffHome = !isAdmin && !canManageProperties && !canManageTenants;
   const [selectedPropertyId, setSelectedPropertyId] = useState("all");
   const [activeView, setActiveView] = useState<"properties" | "meter-readings" | "collections" | "roles">(isAdmin ? "properties" : canReviewCollections && !canMeter && !canReportCollections ? "collections" : "properties");
   const [collectionMode, setCollectionMode] = useState<"report" | "review" | "history">(canReviewCollections && !canReportCollections ? "review" : !canReportCollections && canViewApprovedBills ? "history" : "report");
@@ -262,6 +287,7 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
 
   const selectedProperty = contextPropertyId ? properties.find((property) => property.id === contextPropertyId) : undefined;
   const homeProperty = properties.length === 1 ? properties[0] : selectedProperty;
+  if (simpleStaffHome && activeView === "properties") return <StaffHomeShell session={session} properties={properties} selectedPropertyId={selectedPropertyId} billingMonth={billingMonth} onBillingMonthChange={setBillingMonth} onSelectProperty={setSelectedPropertyId} onMeter={() => setActiveView("meter-readings")} onCollections={() => { setCollectionMode("report"); setActiveView("collections"); }} onViewAll={openMeterOverview} onError={onError} onMessage={onMessage} onLogout={onLogout} />;
   return <main className="min-h-screen bg-sand">
     <header className="border-b border-ink/10 bg-white/70 px-6 py-5 sm:px-10 lg:px-14"><div className="mx-auto flex max-w-7xl items-center justify-between gap-6"><BrandMark /><div className="flex items-center gap-3"><ApiHealth /><NotificationBell permissions={session.permissions} isAdmin={isAdmin} onOpenReport={openNotificationReport} /><div className="hidden text-right sm:block"><p className="text-sm font-bold text-ink">{session.user.fullName}</p><p className="text-xs text-ink/50">{roleLabels[session.user.role]} · {session.organization.name}</p></div><button onClick={onLogout} className="min-h-11 rounded-full border border-ink/15 px-4 py-2 text-xs font-bold text-ink transition hover:bg-white">{text("Log out", "সাইন-আউট")}</button></div></div></header>
     <nav aria-label={text("Primary", "প্রধান নেভিগেশন")} className="no-print mx-auto flex max-w-7xl flex-wrap gap-2 px-6 pt-5 sm:px-10 lg:px-14">{canProperties && <button type="button" onClick={() => setActiveView("properties")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "properties" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Property overview", "সম্পত্তির সারসংক্ষেপ")}</button>}{canMeter && <button type="button" onClick={() => setActiveView("meter-readings")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "meter-readings" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Meter Readings", "মিটার রিডিং")}</button>}{canCollections && <button type="button" onClick={() => setActiveView("collections")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "collections" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Money received", "পাওয়া টাকা")}</button>}{isAdmin && <button type="button" onClick={() => setActiveView("roles")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "roles" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Roles & permissions", "ভূমিকা ও অনুমতি")}</button>}</nav>
@@ -274,6 +300,52 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
       {activeView === "collections" && collectionMode === "report" && canReportCollections && <CollectionReportingWorkspace properties={properties} selectedPropertyId={contextPropertyId} month={billingMonth} onError={onError} onMessage={onMessage} />}
       {activeView === "collections" && collectionMode === "history" && canViewApprovedBills && <CollectionHistoryWorkspace properties={properties} selectedPropertyId={contextPropertyId} month={billingMonth} onError={onError} />}
       {activeView === "properties" && <aside className="mt-8 grid gap-5 lg:grid-cols-2">{isAdmin && <><TenantPanel tenants={tenants} onSaved={refresh} onError={onError} /><StaffPanel staff={staff} properties={properties} onSaved={refresh} onError={onError} onMessage={onMessage} /></>}{session.user.role === "Manager" && <InfoCard title={text("Building manager access", "বিল্ডিং ম্যানেজারের প্রবেশাধিকার")}><p>{text("You may enter readings and report manual receipts only for properties assigned to your account. Bill approval and administration remain restricted.", "আপনার অ্যাকাউন্টে নির্ধারিত সম্পত্তির রিডিং ও হাতে পাওয়া টাকার রিপোর্ট দিতে পারবেন। বিল অনুমোদন ও প্রশাসনিক কাজ সীমিত।")}</p></InfoCard>}{session.user.role === "BuildingStaff" && <InfoCard title={text("Building staff access", "বিল্ডিং স্টাফের প্রবেশাধিকার")}><p>{text("This view is filtered to assigned properties. You may enter readings and report receipts; approvals and administration remain restricted.", "এই স্ক্রিনে শুধু নির্ধারিত সম্পত্তি দেখা যায়। রিডিং ও পাওয়ার রিপোর্ট দিতে পারবেন; অনুমোদন ও প্রশাসনিক কাজ সীমিত।")}</p></InfoCard>}{session.user.role === "FinanceManager" && <InfoCard title={text("Finance manager access", "ফাইন্যান্স ম্যানেজারের প্রবেশাধিকার")}><p>{text("Review and approve manual collection reports for assigned properties. Reading, charge, tenant, and property administration remain restricted.", "নির্ধারিত সম্পত্তির হাতে পাওয়া টাকার রিপোর্ট পর্যালোচনা ও অনুমোদন করুন। রিডিং, চার্জ, ভাড়াটিয়া ও সম্পত্তি প্রশাসন সীমিত।")}</p></InfoCard>}</aside>}
+    </section>
+  </main>;
+}
+
+type StaffHomeShellProps = {
+  session: Session;
+  properties: Property[];
+  selectedPropertyId: string;
+  billingMonth: string;
+  onBillingMonthChange: (month: string) => void;
+  onSelectProperty: (propertyId: string) => void;
+  onMeter: () => void;
+  onCollections: () => void;
+  onViewAll: (propertyId: string, filter?: string) => void;
+  onError: (message: string) => void;
+  onMessage: (message: string) => void;
+  onLogout: () => Promise<void>;
+};
+
+function StaffHomeShell({ session, properties, selectedPropertyId, billingMonth, onBillingMonthChange, onSelectProperty, onMeter, onCollections, onViewAll, onError, onMessage, onLogout }: StaffHomeShellProps) {
+  const { language, text } = useLanguage();
+  const availableProperties = properties.filter((property) => !property.isArchived);
+  const property = availableProperties.length === 1
+    ? availableProperties[0]
+    : availableProperties.find((candidate) => candidate.id === selectedPropertyId);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+
+  function requireProperty(action: (propertyId: string) => void) {
+    if (!property) {
+      onError(text("Choose a property before starting this task.", "এই কাজ শুরু করার আগে একটি সম্পত্তি বেছে নিন।"));
+      return;
+    }
+    action(property.id);
+  }
+
+  if (availableProperties.length === 0) {
+    return <main className="min-h-screen bg-sand"><header className="border-b border-ink/10 bg-white/70 px-6 py-5 sm:px-10"><div className="mx-auto flex max-w-7xl items-center justify-between gap-4"><BrandMark /><div className="flex items-center gap-2"><ApiHealth /><button type="button" onClick={() => void onLogout()} className="min-h-11 rounded-xl border border-ink/15 bg-white px-4 py-2 text-sm font-bold text-ink">{text("Log out", "সাইন-আউট")}</button></div></div></header><section className="mx-auto max-w-4xl px-6 py-12 sm:px-10"><h1 className="text-4xl font-black tracking-[-0.07em] text-ink">{text("My Work", "আমার কাজ")}</h1><EmptyState role={session.user.role} /></section></main>;
+  }
+
+  return <main className="min-h-screen bg-sand">
+    <header className="border-b border-ink/10 bg-white/70 px-6 py-5 sm:px-10 lg:px-14"><div className="mx-auto flex max-w-7xl items-center justify-between gap-4"><BrandMark /><div className="flex items-center gap-2"><ApiHealth /><NotificationBell permissions={session.permissions} isAdmin={false} onOpenReport={(propertyId) => onViewAll(propertyId)} /><div className="hidden text-right sm:block"><p className="text-sm font-bold text-ink">{session.user.fullName}</p><p className="text-xs text-ink/50">{roleLabels[session.user.role]} · {session.organization.name}</p></div><button type="button" onClick={() => void onLogout()} className="min-h-11 rounded-xl border border-ink/15 bg-white px-4 py-2 text-sm font-bold text-ink">{text("Log out", "সাইন-আউট")}</button></div></div></header>
+    <nav aria-label={text("Primary", "প্রধান নেভিগেশন")} className="no-print mx-auto flex max-w-7xl gap-2 px-6 pt-5 sm:px-10 lg:px-14"><span className="min-h-11 rounded-xl bg-pine px-4 py-3 text-sm font-bold text-white">{text("My Work", "আমার কাজ")}</span></nav>
+    <section className="mx-auto max-w-5xl px-6 py-8 sm:px-10 lg:px-14"><div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-pine">{text("Daily tasks", "দৈনিক কাজ")}</p><h1 className="mt-2 text-4xl font-black tracking-[-0.07em] text-ink sm:text-5xl">{text("My Work", "আমার কাজ")}</h1><p className="mt-3 text-base leading-7 text-ink/60">{property ? `${property.name} · ${formatBillingMonth(billingMonth, language)}` : text("Choose one assigned property to continue.", "চালিয়ে যেতে একটি নির্ধারিত সম্পত্তি বেছে নিন।")}</p></div><div className="flex flex-wrap items-end gap-3">{availableProperties.length > 1 ? <label className="text-sm font-bold text-ink">{text("Property", "সম্পত্তি")}<select value={property?.id ?? ""} onChange={(event) => onSelectProperty(event.target.value || "all")} className="mt-1 block min-h-11 min-w-52 rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-base font-normal"><option value="">{text("Choose a property", "সম্পত্তি বেছে নিন")}</option>{availableProperties.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label> : <div className="rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-sm font-bold text-ink"><span className="mr-2 text-xs font-bold text-ink/50">{text("Property", "সম্পত্তি")}</span>{property?.name}</div>}<label className="text-sm font-bold text-ink">{text("Billing month", "বিলের মাস")}<input type="month" value={billingMonth} onChange={(event) => onBillingMonthChange(event.target.value)} className="mt-1 block min-h-11 rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-base font-normal" /></label></div></div>
+      {availableProperties.length > 1 && !property && <p role="alert" className="mt-5 rounded-xl border border-sun/60 bg-sun/15 px-4 py-3 text-base font-semibold text-ink">{text("Select a property. PrimeTect will not choose one for you.", "একটি সম্পত্তি বেছে নিন। PrimeTect আপনার হয়ে কোনোটি বেছে নেবে না।")}</p>}
+      {<StaffTaskCards role={session.user.role} permissions={session.permissions} property={property} month={billingMonth} onMeter={() => requireProperty(() => onMeter())} onCollections={() => requireProperty(() => onCollections())} onProblem={() => requireProperty(() => setFeedbackOpen(true))} onViewAll={() => requireProperty((propertyId) => onViewAll(propertyId))} onUnfinished={() => requireProperty((propertyId) => onViewAll(propertyId, "Missing"))} />}
+      {feedbackOpen && property && <RoomMeterIssueReporter properties={availableProperties} selectedPropertyId={property.id} permissions={session.permissions} onError={onError} onMessage={onMessage} openRequest={1} onClose={() => setFeedbackOpen(false)} />}
     </section>
   </main>;
 }
@@ -337,7 +409,32 @@ function AdminOverviewWorkspace({ properties, selectedPropertyId, month, onSelec
 type RoleActionCardProps = { role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; property?: Property; month?: string; onMeter: () => void; onCollections: () => void; onProblem?: () => void; onViewAll?: () => void; onUnfinished?: () => void };
 
 function RoleActionCards(props: RoleActionCardProps) {
-  return <><LegacyRoleActionCards {...props} /><StaffProgressSummary property={props.property} month={props.month ?? currentMonthInput(props.property?.timeZoneId)} permissions={props.permissions} onViewAll={props.onViewAll ?? props.onMeter} onUnfinished={props.onUnfinished ?? props.onMeter} /></>;
+  return <StaffTaskCards {...props} />;
+}
+
+function StaffTaskCards({ permissions: rawPermissions, property, month, onMeter, onCollections, onProblem = onMeter, onViewAll = onMeter, onUnfinished = onMeter }: RoleActionCardProps) {
+  const { language, text } = useLanguage();
+  const tasks = visibleStaffTasks({
+    viewMeterReadings: rawPermissions?.ViewMeterReadings === true,
+    reportCollections: rawPermissions?.ReportCollections === true,
+    reportRoomMeterIssues: rawPermissions?.ReportRoomMeterIssues === true,
+  });
+  if (!tasks.meter && !tasks.collections && !tasks.feedback) return null;
+  const monthLabel = month ?? currentMonthInput(property?.timeZoneId);
+  return <>
+    <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7">
+      <p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{text("Daily staff tasks", "দৈনিক কর্মীদের কাজ")}</p>
+      <h2 className="mt-2 text-3xl font-black tracking-[-0.06em] text-ink">{text("My Work", "আমার কাজ")}</h2>
+      <p className="mt-2 max-w-2xl text-base leading-7 text-ink/60">{property ? `${property.name} · ${formatBillingMonth(monthLabel, language)}` : text("Choose a property to begin.", "শুরু করতে একটি সম্পত্তি বেছে নিন।")}</p>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {tasks.meter && <button type="button" onClick={onMeter} className="min-h-16 rounded-2xl bg-pine px-5 py-4 text-left text-base font-bold text-white shadow-sm transition hover:bg-ink focus:outline-none focus:ring-2 focus:ring-pine focus:ring-offset-2"><span className="block text-lg">{text("Enter Meter Reading", "মিটার রিডিং লিখুন")}</span><span className="mt-1 block text-sm font-normal text-white/80">{text("Save one room at a time.", "একবারে একটি রুম সেভ করুন।")}</span></button>}
+        {tasks.collections && <button type="button" onClick={onCollections} className="min-h-16 rounded-2xl border-2 border-pine/25 bg-white px-5 py-4 text-left text-base font-bold text-pine transition hover:bg-mint/40 focus:outline-none focus:ring-2 focus:ring-pine focus:ring-offset-2"><span className="block text-lg">{text("Report Money Received", "পাওয়া টাকার হিসাব দিন")}</span><span className="mt-1 block text-sm font-normal text-ink/60">{text("Send a receipt for review.", "রসিদ অনুমোদনের জন্য পাঠান।")}</span></button>}
+        {tasks.feedback && <button type="button" onClick={onProblem} className="min-h-16 rounded-2xl border border-ink/15 bg-sand/70 px-5 py-4 text-left text-base font-bold text-ink transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-pine focus:ring-offset-2"><span className="block text-lg">{text("Feedback / Report", "ফিডব্যাক / রিপোর্ট")}</span><span className="mt-1 block text-sm font-normal text-ink/60">{text("Tell an authorized reviewer about a problem.", "সমস্যার কথা অনুমোদিত পর্যালোচককে জানান।")}</span></button>}
+      </div>
+      {tasks.rooms && <div className="mt-4 border-t border-ink/10 pt-4"><button type="button" onClick={onViewAll} className="min-h-12 rounded-xl border-2 border-pine px-5 py-3 text-base font-bold text-pine focus:outline-none focus:ring-2 focus:ring-pine focus:ring-offset-2">{text("View All Rooms", "সব রুম দেখুন")}</button></div>}
+    </section>
+    {tasks.meter && <StaffProgressSummary property={property} month={monthLabel} permissions={rawPermissions} onViewAll={onViewAll} onUnfinished={onUnfinished} />}
+  </>;
 }
 
 function LegacyRoleActionCards({ role, permissions: rawPermissions, property, month, onMeter, onCollections, onProblem = onMeter, onViewAll = onMeter, onUnfinished = onMeter }: RoleActionCardProps) {
@@ -351,14 +448,17 @@ function LegacyRoleActionCards({ role, permissions: rawPermissions, property, mo
 }
 
 function StaffProgressSummary({ property, month, permissions, onViewAll, onUnfinished }: { property?: Property; month: string; permissions?: Partial<Record<PermissionKey, boolean>>; onViewAll: () => void; onUnfinished: () => void }) {
-  const { text } = useLanguage();
+  const { text, error: localizedError } = useLanguage();
   const [overview, setOverview] = useState<MeterOverview | null>(null);
+  const [loadError, setLoadError] = useState("");
   const canMeter = permissions?.ViewMeterReadings === true;
   useEffect(() => {
-    if (!property || !canMeter) { setOverview(null); return; }
-    apiFetch<MeterOverview>("/api/properties/" + property.id + "/meter-overview/" + month).then(setOverview).catch(() => setOverview(null));
+    if (!property || !canMeter) { setOverview(null); setLoadError(""); return; }
+    setLoadError("");
+    apiFetch<MeterOverview>("/api/properties/" + property.id + "/meter-overview/" + month).then(setOverview).catch((caught) => { setOverview(null); setLoadError(localizedError(caught, "Could not load reading progress.")); });
   }, [property?.id, month, canMeter]);
   if (!canMeter) return null;
+  if (loadError) return <section className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-5 shadow-soft sm:p-7"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-xl font-black text-ink">{text("Reading progress", "রিডিংয়ের অগ্রগতি")}</h3><button type="button" onClick={() => { if (property) { setLoadError(""); void apiFetch<MeterOverview>("/api/properties/" + property.id + "/meter-overview/" + month).then(setOverview).catch((caught) => setLoadError(localizedError(caught, "Could not load reading progress."))); } }} className="min-h-11 rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-bold text-rose-800">{text("Retry", "আবার চেষ্টা করুন")}</button></div><p role="alert" className="mt-3 text-base font-semibold text-rose-800">{loadError}</p></section>;
   const progress = summarizeMeterProgress(overview?.units ?? []);
   return <section className="mt-4 rounded-2xl border border-ink/10 bg-white/75 p-5 shadow-soft sm:p-7"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-xl font-black text-ink">{text("Reading progress", "রিডিংয়ের অগ্রগতি")}</h3>{property && <span className="text-base font-semibold text-ink/60">{progress.entered} / {progress.applicable} {text("applicable entered", "প্রযোজ্য রিডিং দেওয়া হয়েছে")}</span>}</div>{property ? <><div className="mt-4 h-3 overflow-hidden rounded-full bg-ink/10"><div className="h-full rounded-full bg-pine" style={{ width: progress.applicable ? String(Math.round((progress.entered / progress.applicable) * 100)) + "%" : "0%" }} /></div><div className="mt-3 flex flex-wrap gap-2 text-sm font-semibold text-ink/65"><span className="rounded-full bg-sun/20 px-3 py-2">{progress.missing} {text("missing", "বাকি")}</span><span className="rounded-full bg-sand px-3 py-2">{progress.savedDraft} {text("draft", "খসড়া")}</span><span className="rounded-full bg-sand px-3 py-2">{progress.awaitingReview} {text("awaiting review", "পর্যালোচনায়")}</span><span className="rounded-full bg-mint px-3 py-2">{progress.approved} {text("approved", "অনুমোদিত")}</span></div></> : <p className="mt-3 text-base text-ink/60">{text("Choose one property to see accurate progress.", "সঠিক অগ্রগতি দেখতে একটি সম্পত্তি বেছে নিন।")}</p>}<div className="mt-4 flex flex-wrap gap-3"><button type="button" onClick={onViewAll} className="min-h-12 rounded-xl border-2 border-pine px-5 py-3 text-base font-bold text-pine">{text("View all rooms", "সব রুম দেখুন")}</button>{property && progress.missing > 0 && <button type="button" onClick={onUnfinished} className="min-h-12 rounded-xl border border-ink/15 bg-white px-4 py-3 text-base font-bold text-ink">{text("Open unfinished rooms", "বাকি রুম খুলুন")}</button>}</div></section>;
 }
@@ -1319,6 +1419,10 @@ function RoomMeterIssueReporter({ properties = [], property, selectedPropertyId,
 const FeedbackReportWorkspace = RoomMeterIssueReporter;
 
 function MeterOverviewWorkspace({ property, month: billingMonth, permissions, onError, initialRequest }: { property: Property; month?: string; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; initialRequest?: { propertyId: string; filter: string } | null }) {
+  return <><div data-room-overview><MeterOverviewWorkspaceCore property={property} month={billingMonth} permissions={permissions} onError={onError} initialRequest={initialRequest} /></div><CycleSubmissionPanel property={property} month={billingMonth ?? currentMonthInput(property.timeZoneId)} permissions={permissions} onError={onError} onMessage={() => undefined} /></>;
+}
+
+function MeterOverviewWorkspaceCore({ property, month: billingMonth, permissions, onError, initialRequest }: { property: Property; month?: string; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; initialRequest?: { propertyId: string; filter: string } | null }) {
   const { text, error: localizedError } = useLanguage();
   const [month, setMonth] = useState(billingMonth ?? currentMonthInput(property.timeZoneId));
   const [floorId, setFloorId] = useState("all");
@@ -1373,18 +1477,18 @@ function MeterOverviewWorkspace({ property, month: billingMonth, permissions, on
 }
 function BillingPanel(props: { property: Property; month?: string; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; meterOnly?: boolean; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void; onCurrentUnitChange?: (unitId: string | null) => void }) {
   return <div data-guided-meter-entry={props.meterOnly ? "true" : undefined}>
-    {props.meterOnly ? <><RoomMeterEntry {...props} /><CycleSubmissionPanel property={props.property} month={props.month ?? currentMonthInput(props.property.timeZoneId)} role={props.role} permissions={props.permissions} onError={props.onError} onMessage={props.onMessage} /></> : <LegacyBillingPanel {...props} />}
+    {props.meterOnly ? <RoomMeterEntry {...props} /> : <LegacyBillingPanel {...props} />}
   </div>;
 }
 
-function CycleSubmissionPanel({ property, month, role, permissions, onError, onMessage }: { property: Property; month: string; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void }) {
+function CycleSubmissionPanel({ property, month, role, permissions, onError, onMessage }: { property: Property; month: string; role?: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void }) {
   const { text, error: localizedError } = useLanguage();
   const [cycle, setCycle] = useState<BillingCycle | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [returnReason, setReturnReason] = useState("");
   const canSubmit = permissions ? permissions.SubmitMeterReadings === true : role !== "FinanceManager";
-  const canReview = role === "Admin" || permissions?.ReviewBills === true;
+  const canReview = permissions ? permissions.ReviewBills === true : role === "Admin";
   const meterBills = cycle?.bills.filter((bill) => bill.charges.some((charge) => charge.isMetered)) ?? [];
   const completed = meterBills.filter((bill) => bill.charges.some((charge) => charge.isMetered && charge.currentReading !== null)).length;
   async function load() {
@@ -1817,6 +1921,11 @@ function currentDateParts(timeZoneId = "Asia/Dhaka") {
 }
 function currentMonthInput(timeZoneId?: string) { const date = currentDateParts(timeZoneId); return `${date.year}-${date.month}`; }
 function currentDateInput(timeZoneId?: string) { const date = currentDateParts(timeZoneId); return `${date.year}-${date.month}-${date.day}`; }
+function formatBillingMonth(value: string, language: "en" | "bn") {
+  const [year, month] = value.split("-").map(Number);
+  if (!year || !month || month < 1 || month > 12) return value;
+  return new Intl.DateTimeFormat(language === "bn" ? "bn-BD" : "en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1)));
+}
 function formatPropertyDateFromUtc(value: string, timeZoneId?: string) {
   try { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: timeZoneId || "Asia/Dhaka" }).format(new Date(value)); }
   catch { return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value)); }

@@ -15,10 +15,27 @@ body {
   background: #f6f2e8;
   color: #10231f;
   font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+}
+
+:focus-visible {
+  outline: 3px solid #1f6f5b;
+  outline-offset: 2px;
 }
 
 /* The workspace owns one visible billing-month context for guided meter entry. */
 [data-guided-meter-entry] label:has(input[type="month"]) {
+  display: none;
+}
+
+/* The shared header owns property/month context. Keep filters and cycle cards in the overview. */
+[data-guided-meter-entry] > section > div:first-child > div:last-child,
+[data-guided-meter-entry] > section > div.mt-4.grid.gap-2,
+[data-guided-meter-entry] > section > label.mt-4 {
+  display: none;
+}
+
+[data-room-overview] label:has(input[type="month"]) {
   display: none;
 }
 

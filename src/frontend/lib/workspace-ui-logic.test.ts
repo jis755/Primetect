@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { nextMeterRoomIndex, preserveRoomDraftAfterFailure, reportableCollectionAmount, summarizeMeterProgress } from "./workspace-ui-logic.ts";
+import { collectionBillDisplay, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
 
 test("room entry advances only after a successful save and stops at the last room", () => {
   assert.equal(nextMeterRoomIndex(0, 3, false), 1);
@@ -28,4 +28,28 @@ test("counts only applicable units and keeps review states distinct", () => {
     { electricityApplicable: true, readingStatus: "Approved" },
     { electricityApplicable: false, readingStatus: "NotApplicable" },
   ]), { applicable: 5, entered: 4, missing: 1, savedDraft: 1, awaitingReview: 1, returned: 1, approved: 1 });
+});
+
+test("staff task cards follow effective permissions", () => {
+  assert.deepEqual(visibleStaffTasks({ viewMeterReadings: true, reportCollections: false, reportRoomMeterIssues: true }), {
+    meter: true,
+    collections: false,
+    feedback: true,
+    rooms: true,
+  });
+});
+
+test("monthly submission is available only from the overview", () => {
+  assert.equal(monthlySubmissionLocation("entry"), false);
+  assert.equal(monthlySubmissionLocation("overview"), true);
+});
+
+test("language changes preserve property, month, and room context", () => {
+  const context = { propertyId: "property-1", billingMonth: "2026-10", unitId: "unit-6b", language: "en" as const };
+  assert.deepEqual(preserveWorkflowContext(context, "bn"), { ...context, language: "bn" });
+});
+
+test("missing approved bills remain distinct from zero-valued bills", () => {
+  assert.equal(collectionBillDisplay(null), "No approved bill");
+  assert.equal(collectionBillDisplay(0), "Tk 0.00 billed");
 });
