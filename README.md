@@ -269,6 +269,83 @@ Bilingual manual checklist:
 5. Repeat at desktop and narrow mobile widths, test filters and validation, and confirm no table requires horizontal
    scrolling. Browser automation was unavailable during preparation, so visual verification remains pending.
 
+### Fresh repaired-workflow recovery demo
+
+The current repaired-workflow demo is a new isolated PostgreSQL database:
+`primetect_demo_repaired_20261010_840ff5d8`. All eight committed migrations,
+including `RoomMeterIssues`, were applied from an empty database. The existing
+`primetect` database was not changed, and its migration status remains unknown.
+
+The active local pair is:
+
+- API: `http://127.0.0.1:5002` (`/api/health`)
+- Frontend: `http://127.0.0.1:3002`
+- Database: `primetect_demo_repaired_20261010_840ff5d8`
+- Credential file: `src/backend/PrimeTect.Api/recovery-demo.credentials.secret.json`
+- Configuration file: `src/backend/PrimeTect.Api/appsettings.RecoveryDemo.Local.json`
+
+Both local files are ignored. View the credential file locally when needed;
+do not paste its passwords into tracked files or messages. The demo contains
+Admin, Manager, Building Staff, and Finance accounts; a two-unit named tenant,
+an unnamed tenant, a former-occupant history, and an additional current unit
+assignment for the named tenant. Ground has two units and Upper has three.
+
+The January 2026 cycle is approved. February 2026 is a saved partial draft:
+one applicable room has a saved reading and the remaining applicable rooms are
+still missing. The demo includes a pending Staff collection report and a
+separately approved Finance collection report. Room issues are Open,
+Acknowledged, and Resolved, with audit history. U-02 is fixed-charge-only and
+appears as Not applicable for meter readings. An explicit occupied-without-
+details status is retained alongside the unnamed tenant assignment used by
+the billing policy.
+
+Port history: the older collection-demo instructions use 5001/3001, while the
+existing GuidedDemo uses 5000/3000. Port 5001 is not the active repaired API;
+5000 remains the earlier GuidedDemo pair whose database lacks RoomMeterIssues.
+The fresh recovery pair uses 5002/3002 so those existing processes and data
+are not terminated or changed.
+
+To restart this pair after stopping only the confirmed 5002/3002 processes,
+load the ignored configuration and use the current source build:
+
+```powershell
+$demo = Get-Content src/backend/PrimeTect.Api/appsettings.RecoveryDemo.Local.json | ConvertFrom-Json
+$env:ASPNETCORE_ENVIRONMENT = "Demo"
+$env:Database__Provider = "PostgreSQL"
+$env:ConnectionStrings__PrimeTectDatabase = $demo.connectionString
+$env:AllowedOrigins__0 = "http://127.0.0.1:3002"
+$env:AllowedOrigins__1 = "http://localhost:3002"
+dotnet run --no-build --no-launch-profile --project src/backend/PrimeTect.Api --urls http://127.0.0.1:5002
+```
+
+In a second terminal:
+
+```powershell
+Set-Location src/frontend
+$env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:5002"
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3002
+```
+
+Stop only the confirmed PrimeTect listeners with `Ctrl+C` for foreground
+processes, or inspect `Get-NetTCPConnection -LocalPort 5002,3002 -State Listen`
+before stopping background processes. No migration command is needed for this
+already-migrated demo database.
+
+Recovery-demo manual checklist:
+
+1. Log in separately as Staff and Finance. Confirm Staff can open the January
+   room overview and cannot approve its own pending collection; confirm Finance
+   can approve the separate Staff report.
+2. Open February meter readings. Confirm the saved G-01 reading, missing-room
+   states, previous approved readings, and U-02 Not applicable status.
+3. As Admin, inspect Open, Acknowledged, and Resolved room issues and their
+   audit history. Confirm issue reporting does not alter readings or bills.
+4. In tenant management, select Demo Family, verify G-01/G-02/U-03 current
+   assignments, and verify the unnamed tenant and occupancy-history examples.
+5. Repeat at a narrow mobile width and switch বাংলা / English. Browser
+   automation was unavailable, so visual and accessibility verification remain
+   pending.
+
 ## Build and verify
 
 ```powershell
