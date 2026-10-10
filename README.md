@@ -291,7 +291,7 @@ Properties use the configured `TimeZoneId` when initializing today/month in the 
 - Tenant records allow independently optional name and phone fields, multiple unit assignments, dated history, overlap prevention, and `Not connected` onboarding status.
 - The frontend supports property and floor editing, occupancy history with move-in/move-out closure, property charge defaults, unit-level inherited/custom/disabled charge modes, decimal amounts, and effective billing months. Unsaved charge rows can be removed locally; saved rows use an explicit End charge action that writes a disabled effective-month history row without deleting earlier settings or independent unit overrides.
 - Monthly billing supports one draft cycle per property/month, effective charge snapshots, fixed charges, metered electricity, explicit opening readings, approved-period carry-forward, configurable property and per-unit electricity rates, configurable inherited/custom/disabled low-bill warnings, missing-reading and policy-gap blocks, assigned operational submission, and Admin-only bill return/approval. Approved snapshots are immutable and are never labeled as collected.
-- The dedicated Meter Readings menu reuses the monthly billing cycle and calculation endpoints. It provides property and month selection, floor filtering, unit search, desktop/mobile meter entry, reading dates, calculated consumption/rates/amounts, warning states, and the existing draft → submitted → returned → submitted → approved workflow. Fixed-charge-only units are omitted from the meter list. Property rate and warning defaults are edited on this screen; individual unit overrides remain under Properties → Unit charges.
+- The dedicated Meter Readings menu reuses the monthly billing cycle and calculation endpoints. It provides one shared property/month context, floor filtering, unit search, desktop/mobile meter entry, reading dates, calculated consumption/rates/amounts, warning states, and the existing draft → submitted → returned → submitted → approved workflow. Fixed-charge-only units are omitted from the meter list. Property rate and warning defaults are edited from the authorized Property overview → Charge defaults action; individual unit overrides remain under Unit charges.
 - Approved billing snapshots can be printed as an individual unit bill, a known-tenant multi-unit statement, or a property summary grouped by historical floor. A monthly comparison report uses only approved snapshots, reports billed totals/charge differences and electricity consumption, marks missing or unapproved periods incomplete, and leaves zero-baseline percentage changes unavailable. A4 print styles support browser Print/Save as PDF; legacy approved cycles without property/floor snapshot fields are refused rather than filled from current records.
 - Staff invitations are accepted through a secure one-time token form with expiry and reuse protection. Invitation tokens are shared manually because email delivery is not connected.
 - Manual collection reporting is linked to one approved historical unit bill and its occupancy snapshot. Building Managers/Building Staff can submit full or partial reports with received date, method, and note. Reports move Pending → Returned → Pending → Approved; pending/returned reports do not reduce confirmed outstanding balances. Finance Managers or Admins independently approve or return them, and self-approval is rejected. Approved reports are immutable; a reversal is a separate reasoned workflow requiring independent approval. No bank/provider verification, automatic allocation across bills, rent invention, transfer to a new occupant, SMS, or email is claimed.
@@ -314,6 +314,37 @@ The selected billing month is the month in which the bill is issued. Meter consu
 Electricity amount is rounded to two decimal places using the existing away-from-zero money rule. A low-bill warning is informational only and appears strictly below the effective threshold; the initial default is Tk200, so Tk199 warns while Tk200 does not. It never adds a minimum fee and does not block approval.
 
 The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, and `RoomMeterIssues` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
+
+### Simplified workspace navigation
+
+The signed-in home uses the effective organization permissions returned by `/api/auth/me`; role names are labels, not
+authorization. Staff and Building Managers get the permitted task cards for **Enter meter reading / মিটার রিডিং লিখুন**,
+**Report money received / পাওয়া টাকার হিসাব দিন**, and **Report a problem / সমস্যা জানান**, with **View all rooms / সব
+রুম দেখুন** as a secondary action. Finance users get separate collection and reversal review tasks. Admins retain the
+property overview, billing/collection review, setup, people, permissions, and report access. Property assignment remains
+an additional server-enforced restriction.
+
+Meter entry uses one shared property and billing-month context. **Save & Next Room** persists one room only and advances
+after the API confirms success; saving never submits the month. Monthly submission is a separate cycle-summary action and
+continues to use the existing server eligibility and approval granularity. Collection reporting starts with a blank amount,
+shows billed/confirmed/pending/remaining values, and sends one full or partial receipt for independent approval. Pending
+receipts are never called paid or confirmed.
+
+Short manual usability checklist:
+
+1. Enter three room readings, switch English / বাংলা, and confirm the selected property, month, room, reading, and
+   observation date remain unchanged. Save one room and confirm the success message before the next room opens.
+2. Report a damaged meter from the separate problem action without entering a fabricated meter reading; confirm the
+   issue report does not change billing data.
+3. Report a partial collection against one approved bill, then review it with a different authorized account. Confirm
+   pending, confirmed, and outstanding amounts remain distinct.
+4. Open **View all rooms** and find a missing reading and an outstanding balance; confirm non-metered units are shown as
+   Not applicable rather than missing.
+5. Check a returned reading/report, a failed save, keyboard focus, and a narrow mobile width. Browser automation is not
+   part of the repository test command, so visual behavior still requires manual browser inspection.
+
+The frontend's dependency-free `npm.cmd run test:ui` covers room-advance, failed-save draft preservation, Bangla numeric
+normalization, and current-remaining-balance amount rules. It runs separately from the production build.
 
 ## npm audit review
 

@@ -17,6 +17,11 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* The workspace owns one visible billing-month context for guided meter entry. */
+[data-guided-meter-entry] label:has(input[type="month"]) {
+  display: none;
+}
+
 ::selection {
   background: #e8b65a;
   color: #10231f;
