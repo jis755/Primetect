@@ -222,7 +222,14 @@ public sealed record FloorResponse(Guid Id, string Name, int SortOrder, bool IsA
 
 public sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, IReadOnlyList<FloorResponse> Floors, string TimeZoneId);
 
-public sealed record TenantResponse(Guid Id, string? Name, string? Phone, OnboardingStatus OnboardingStatus);
+public sealed record TenantCurrentUnitResponse(Guid PropertyId, string PropertyName, Guid UnitId, string UnitName, DateOnly StartDate);
+
+public sealed record TenantResponse(
+    Guid Id,
+    string? Name,
+    string? Phone,
+    OnboardingStatus OnboardingStatus,
+    IReadOnlyList<TenantCurrentUnitResponse>? CurrentAssignments = null);
 
 public sealed record ChargeConfigurationResponse(
     Guid Id,

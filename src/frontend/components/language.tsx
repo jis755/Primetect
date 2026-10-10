@@ -47,8 +47,10 @@ export function localizeError(caught: unknown, fallback: string, language: Langu
 
   if (caught instanceof ApiError) {
     if (caught.status === 401) return "আপনার সাইন-ইন সেশন শেষ হয়েছে। আবার সাইন-ইন করুন।";
+    if (caught.status === 403 && caught.message.includes("Another authorized person")) return "অন্য একজন অনুমোদিত ব্যক্তি আপনার রিপোর্ট অনুমোদন করবেন।";
     if (caught.status === 403) return "এই কাজটি করার অনুমতি আপনার নেই বা সম্পত্তিটি আপনার জন্য নির্ধারিত নয়।";
     if (caught.status === 409) return "তথ্যটি অন্য কেউ পরিবর্তন করেছেন। নতুন তথ্য লোড করে আবার চেষ্টা করুন।";
+    if (caught.status === 503 && caught.message.includes("Room/meter issue storage")) return "রুম বা মিটারের সমস্যা রিপোর্টিং চালু করতে এই ডেটাবেসে প্রয়োজনীয় মাইগ্রেশন লাগবে।";
   }
 
   const messages: Record<string, string> = {
@@ -61,6 +63,7 @@ export function localizeError(caught: unknown, fallback: string, language: Langu
     "The report was not saved. Your entered values remain here.": "রিপোর্ট সংরক্ষণ করা যায়নি। আপনার লেখা তথ্য এখানেই আছে।",
     "Could not load the collection overview.": "পাওয়ার রিপোর্টের সারসংক্ষেপ লোড করা যায়নি।",
     "Could not load room or meter issues.": "রুম বা মিটারের সমস্যার রিপোর্ট লোড করা যায়নি।",
+    "Could not load the room reading overview.": "রুমের রিডিং overview লোড করা যায়নি। আবার চেষ্টা করুন।",
     "The issue report was not sent. No billing data was changed.": "সমস্যার রিপোর্ট পাঠানো যায়নি। কোনো বিলিং তথ্য বদলায়নি।",
     "This issue changed since it was loaded. Refresh before trying again.": "সমস্যাটি লোড করার পর বদলেছে। আবার চেষ্টা করার আগে নতুন করে লোড করুন।",
     "This collection or reversal changed since it was loaded. Refresh before trying again.": "এই পাওয়ার রিপোর্ট বা ফেরত পরিবর্তন হয়েছে। আবার চেষ্টা করার আগে নতুন করে লোড করুন।",

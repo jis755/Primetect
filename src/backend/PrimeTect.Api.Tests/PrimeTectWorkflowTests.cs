@@ -221,6 +221,10 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
         Assert.Equal(HttpStatusCode.OK, closeOccupancy.StatusCode);
         var history = await admin.GetAsync($"/api/properties/{property.Id}/units/{unitA.Id}/occupancy");
         Assert.Contains("2026-06-01", await history.Content.ReadAsStringAsync());
+        var tenantList = await ReadAsync<List<TenantResponse>>(await admin.GetAsync("/api/tenants"));
+        var tenantWithCurrentAssignment = tenantList.Single(item => item.Id == tenant.Id);
+        Assert.Single(tenantWithCurrentAssignment.CurrentAssignments ?? []);
+        Assert.Equal(unitB.Id, tenantWithCurrentAssignment.CurrentAssignments![0].UnitId);
 
         var tenantUpdate = await admin.PutAsJsonAsync($"/api/tenants/{tenant.Id}", new { name = "Details Added Later", phone = (string?)null });
         var updatedTenant = await ReadAsync<TenantResponse>(tenantUpdate);
@@ -328,7 +332,9 @@ public sealed class PrimeTectWorkflowTests : IClassFixture<PrimeTectApiFactory>
 
     private sealed record InvitationResponse(Guid Id, string Email, UserRole Role, DateTimeOffset ExpiresAtUtc, string InvitationToken, string DeliveryStatus);
 
-    private sealed record TenantResponse(Guid Id, string? Name, string? Phone, OnboardingStatus OnboardingStatus);
+    private sealed record TenantCurrentUnitResponse(Guid PropertyId, string PropertyName, Guid UnitId, string UnitName, DateOnly StartDate);
+
+    private sealed record TenantResponse(Guid Id, string? Name, string? Phone, OnboardingStatus OnboardingStatus, List<TenantCurrentUnitResponse>? CurrentAssignments = null);
 
     private sealed record OccupancyResponse(Guid Id, Guid OrganizationId, Guid TenantId, Guid UnitId, DateOnly StartDate, DateOnly? EndDate, DateTimeOffset CreatedAtUtc);
 

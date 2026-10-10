@@ -225,7 +225,9 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
             referenceNote = "Admin-entered receipt",
             submissionKey = Guid.NewGuid(),
         }));
-        Assert.Equal(HttpStatusCode.Forbidden, (await admin.PostAsJsonAsync($"/api/collection-reports/{adminReport.Id}/approve", new { expectedVersion = adminReport.Version })).StatusCode);
+        var adminSelfApproval = await admin.PostAsJsonAsync($"/api/collection-reports/{adminReport.Id}/approve", new { expectedVersion = adminReport.Version });
+        Assert.Equal(HttpStatusCode.Forbidden, adminSelfApproval.StatusCode);
+        Assert.Contains("Another authorized person", await adminSelfApproval.Content.ReadAsStringAsync());
         factory.FailNextSave = true;
         Assert.Equal(HttpStatusCode.InternalServerError, (await finance.PostAsJsonAsync($"/api/collection-reports/{adminReport.Id}/approve", new { expectedVersion = adminReport.Version })).StatusCode);
         var afterFailedApproval = await ReadAsync<CollectionQueueResponse>(await finance.GetAsync($"/api/properties/{property.Id}/collection-reports/2026-01"));

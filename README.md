@@ -4,6 +4,30 @@ PrimeTect is a property-management platform for properties, tenants, maintenance
 
 This repository is intentionally standalone. It includes a branded Next.js frontend, a .NET Clean Architecture API, and PostgreSQL/EF Core persistence wiring. Monthly bills and manual collection reports are separate approval workflows; online payment processing and deployment are not included.
 
+### Repair milestone: live-runtime checks and tenant assignment
+
+The current local GuidedDemo API was inspected at `http://127.0.0.1:5000`.
+Its database is the existing isolated GuidedDemo database, not `primetect`;
+its migration history currently ends at `20261009221340_PropertyTimeZone`.
+The `20261010091817_RoomMeterIssues` migration is present in source but is
+not applied to that existing database. The API now reports a clear
+`503 Service Unavailable` for issue-backed room-overview/reporting requests
+when that storage is absent; it does not apply the migration automatically.
+Apply that migration only to a newly created disposable/demo database before
+using room/meter issue workflows. Do not point local setup at `primetect`.
+
+Collection approval remains independent and server-enforced. A person who
+submitted a collection report cannot approve it, including an Admin. The
+review screen hides approval for the submitter and explains that another
+authorized person must approve; return and history actions remain available.
+
+The property tenant picker now distinguishes **Assign existing tenant**,
+**Add tenant**, and **Occupancy without tenant details**. Existing tenants
+are selected by stable ID and their current units are shown, so the same
+tenant can be assigned to another eligible unit without matching by name or
+phone. Name and phone remain independently optional, and occupancy history
+continues to be closed rather than overwritten when a tenant moves out.
+
 ## Repository layout
 
 ```text
@@ -136,8 +160,9 @@ Manual review checklist:
 ### Fresh guided-entry demo
 
 The current checkpoint also has a new isolated synthetic demo database:
-`primetect_demo_guided_20261010_da3c89c`. It was created from empty and all eight committed migrations were applied
-to it. It is separate from both `primetect` and the earlier collection demo. It contains unequal Ground/Upper floors,
+`primetect_demo_guided_20261010_da3c89c`. It is separate from both `primetect` and the earlier collection demo. The
+currently running copy has the first seven migrations applied; `RoomMeterIssues` remains unapplied there. Use a new
+disposable database for the complete eight-migration issue workflow. It contains unequal Ground/Upper floors,
 mixed fixed and metered charges, inherited/custom/disabled examples, a named tenant occupying multiple units, an
 unnamed occupancy, two consecutive approved billing months (September and October 2026), and one pending cash
 collection report.
@@ -362,16 +387,16 @@ npm.cmd run build
 Pop-Location
 ```
 
-For the existing local demo API, verify that the API process is listening on `http://127.0.0.1:5001` and that its ignored `src/backend/PrimeTect.Api/appsettings.GuidedDemo.json` is the intended local configuration before starting a frontend. The frontend defaults to port 5000, so point it at the running API explicitly:
+For the existing local GuidedDemo API, verify that the API process is listening on `http://127.0.0.1:5000` and that its ignored `src/backend/PrimeTect.Api/appsettings.GuidedDemo.json` is the intended local configuration before starting a frontend. The current database is missing `RoomMeterIssues`, so issue-backed room overview/reporting remains migration-blocked until a fresh disposable/demo database is prepared. The frontend can use the API directly:
 
 ```powershell
 Push-Location src/frontend
-$env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:5001"
+$env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:5000"
 npm.cmd run dev -- --hostname 127.0.0.1 --port 3000
 Pop-Location
 ```
 
-Open `http://127.0.0.1:3000`. Stop only the frontend process you started with `Ctrl+C`; do not stop the already-running API unless you own that process. Credentials remain in the ignored local demo credential file documented earlier in this README and are never printed or committed.
+Open `http://127.0.0.1:3000`. Restart the API from the current build when you need these source changes live. Credentials remain in the ignored local demo credential file documented earlier in this README and are never printed or committed.
 
 Manual usability checklist:
 

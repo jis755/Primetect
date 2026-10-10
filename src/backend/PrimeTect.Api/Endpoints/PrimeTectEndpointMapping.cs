@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Data.Common;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
@@ -855,7 +856,37 @@ public static class PrimeTectEndpointMapping
         }
 
         var tenants = await query.OrderBy(tenant => tenant.Name).ToListAsync(cancellationToken);
-        return Results.Ok(tenants.Select(tenant => new TenantResponse(tenant.Id, tenant.Name, tenant.Phone, tenant.OnboardingStatus)));
+        var tenantIds = tenants.Select(tenant => tenant.Id).ToArray();
+        var currentAssignments = await (
+            from assignment in db.OccupancyAssignments.AsNoTracking()
+            join unit in db.Units.AsNoTracking() on assignment.UnitId equals unit.Id
+            join property in db.Properties.AsNoTracking() on unit.PropertyId equals property.Id
+            where tenantIds.Contains(assignment.TenantId)
+                && assignment.OrganizationId == actor.OrganizationId
+                && assignment.EndDate == null
+                && property.OrganizationId == actor.OrganizationId
+                && (actor.IsAdmin || db.StaffPropertyAssignments.Any(staff => staff.UserId == actor.UserId && staff.PropertyId == property.Id))
+            select new
+            {
+                assignment.TenantId,
+                PropertyId = property.Id,
+                PropertyName = property.Name,
+                UnitId = unit.Id,
+                UnitName = unit.Name,
+                assignment.StartDate,
+            }).ToListAsync(cancellationToken);
+
+        return Results.Ok(tenants.Select(tenant => new TenantResponse(
+            tenant.Id,
+            tenant.Name,
+            tenant.Phone,
+            tenant.OnboardingStatus,
+            currentAssignments
+                .Where(assignment => assignment.TenantId == tenant.Id)
+                .OrderBy(assignment => assignment.PropertyName)
+                .ThenBy(assignment => assignment.UnitName)
+                .Select(assignment => new TenantCurrentUnitResponse(assignment.PropertyId, assignment.PropertyName, assignment.UnitId, assignment.UnitName, assignment.StartDate))
+                .ToList())));
     }
 
     private static async Task<IResult> CreateTenantAsync(
@@ -2146,11 +2177,20 @@ public static class PrimeTectEndpointMapping
         var lines = billIds.Length == 0
             ? []
             : await db.BillingChargeLines.AsNoTracking().Where(item => billIds.Contains(item.BillingUnitBillId)).ToListAsync(cancellationToken);
-        var issueCounts = await db.RoomMeterIssues.AsNoTracking()
-            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
-            .GroupBy(item => item.UnitId)
-            .Select(group => new { UnitId = group.Key, Total = group.Count(), Open = group.Count(item => item.Status != RoomMeterIssueStatus.Resolved) })
-            .ToDictionaryAsync(item => item.UnitId, cancellationToken);
+        Dictionary<Guid, RoomMeterIssueCount> issueCounts;
+        try
+        {
+            issueCounts = (await db.RoomMeterIssues.AsNoTracking()
+                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+                .GroupBy(item => item.UnitId)
+                .Select(group => new RoomMeterIssueCount(group.Key, group.Count(), group.Count(item => item.Status != RoomMeterIssueStatus.Resolved)))
+                .ToListAsync(cancellationToken))
+                .ToDictionary(item => item.UnitId);
+        }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            return RoomMeterIssueStorageUnavailable();
+        }
 
         var billByUnit = bills.ToDictionary(item => item.UnitId);
         var lineByBill = lines.GroupBy(item => item.BillingUnitBillId).ToDictionary(group => group.Key, group => group.ToList());
@@ -2306,17 +2346,24 @@ public static class PrimeTectEndpointMapping
             return Results.NotFound();
         }
 
-        var issues = await db.RoomMeterIssues.AsNoTracking()
-            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && (canReview || item.ReporterUserId == actor.UserId))
-            .OrderByDescending(item => item.CreatedAtUtc)
-            .ToListAsync(cancellationToken);
-        var responses = new List<RoomMeterIssueResponse>(issues.Count);
-        foreach (var issue in issues)
+        try
         {
-            responses.Add(await ToRoomMeterIssueResponseAsync(db, issue, cancellationToken));
-        }
+            var issues = await db.RoomMeterIssues.AsNoTracking()
+                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && (canReview || item.ReporterUserId == actor.UserId))
+                .OrderByDescending(item => item.CreatedAtUtc)
+                .ToListAsync(cancellationToken);
+            var responses = new List<RoomMeterIssueResponse>(issues.Count);
+            foreach (var issue in issues)
+            {
+                responses.Add(await ToRoomMeterIssueResponseAsync(db, issue, cancellationToken));
+            }
 
-        return Results.Ok(responses);
+            return Results.Ok(responses);
+        }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            return RoomMeterIssueStorageUnavailable();
+        }
     }
 
     private static async Task<IResult> CreateRoomMeterIssueAsync(
@@ -2381,6 +2428,11 @@ public static class PrimeTectEndpointMapping
             await transaction.CommitAsync(cancellationToken);
             return Results.Created($"/api/room-meter-issues/{issue.Id}", await ToRoomMeterIssueResponseAsync(db, issue, cancellationToken));
         }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return RoomMeterIssueStorageUnavailable();
+        }
         catch (Exception)
         {
             await transaction.RollbackAsync(cancellationToken);
@@ -2421,7 +2473,15 @@ public static class PrimeTectEndpointMapping
             return Results.Forbid();
         }
 
-        var issue = await db.RoomMeterIssues.FirstOrDefaultAsync(item => item.Id == issueId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        RoomMeterIssue? issue;
+        try
+        {
+            issue = await db.RoomMeterIssues.FirstOrDefaultAsync(item => item.Id == issueId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            return RoomMeterIssueStorageUnavailable();
+        }
         if (issue is null || await AccessibleProperties(db, actor, includeArchived: false).AllAsync(item => item.Id != issue.PropertyId, cancellationToken))
         {
             return Results.NotFound();
@@ -2472,6 +2532,11 @@ public static class PrimeTectEndpointMapping
         {
             await transaction.RollbackAsync(cancellationToken);
             return Results.Conflict(new { message = "This issue changed since it was loaded. Refresh before trying again." });
+        }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return RoomMeterIssueStorageUnavailable();
         }
     }
 
@@ -2746,7 +2811,7 @@ public static class PrimeTectEndpointMapping
 
         if (context.Report.LastChangedByUserId == actor.UserId)
         {
-            return Results.Forbid();
+            return SelfApprovalForbidden();
         }
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
@@ -2775,7 +2840,7 @@ public static class PrimeTectEndpointMapping
             if (report.LastChangedByUserId == actor.UserId)
             {
                 await transaction.RollbackAsync(cancellationToken);
-                return Results.Forbid();
+                return SelfApprovalForbidden();
             }
 
             var confirmed = await ConfirmedCollectionAmountAsync(db, lockedBill.Id, cancellationToken);
@@ -3751,6 +3816,8 @@ public static class PrimeTectEndpointMapping
 
     private sealed record ChargeMetricBucket(decimal Amount, HashSet<Guid> UnitIds);
 
+    private sealed record RoomMeterIssueCount(Guid UnitId, int Total, int Open);
+
     private sealed record ComparisonValues(decimal? Difference, decimal? PercentageChange, bool PercentageChangeAvailable);
 
     private sealed record EffectiveCharge(
@@ -3769,6 +3836,21 @@ public static class PrimeTectEndpointMapping
     private static IQueryable<Tenant> AccessibleTenants(PropertyManagementDbContext db, RequestUser actor) =>
         db.Tenants.Where(tenant => tenant.OrganizationId == actor.OrganizationId
             && (actor.IsAdmin || db.OccupancyAssignments.Any(assignment => assignment.TenantId == tenant.Id && db.Units.Any(unit => unit.Id == assignment.UnitId && db.StaffPropertyAssignments.Any(staff => staff.UserId == actor.UserId && staff.PropertyId == unit.PropertyId)))));
+
+    private static bool IsMissingRoomMeterIssueStorage(Exception exception) =>
+        exception switch
+        {
+            DbException databaseException when databaseException.Message.Contains("room_meter_issues", StringComparison.OrdinalIgnoreCase)
+                || databaseException.Message.Contains("room_meter_issue_audit_entries", StringComparison.OrdinalIgnoreCase) => true,
+            _ when exception.InnerException is not null => IsMissingRoomMeterIssueStorage(exception.InnerException),
+            _ => false,
+        };
+
+    private static IResult RoomMeterIssueStorageUnavailable() =>
+        Results.Problem(
+            title: "Room/meter issue storage unavailable",
+            detail: "Room/meter issue reporting is unavailable until migration 20261010091817_RoomMeterIssues is applied to this database.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
 
     private static async Task<Unit?> AccessibleUnitAsync(PropertyManagementDbContext db, RequestUser actor, Guid propertyId, Guid unitId, CancellationToken cancellationToken) =>
         await db.Units.FirstOrDefaultAsync(unit => unit.Id == unitId && unit.PropertyId == propertyId && unit.OrganizationId == actor.OrganizationId
@@ -3918,6 +4000,11 @@ public static class PrimeTectEndpointMapping
 
     private static IResult BadRequest(string message) =>
         Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [message] });
+
+    private static IResult SelfApprovalForbidden() =>
+        Results.Json(
+            new { message = "Another authorized person must approve this collection report." },
+            statusCode: StatusCodes.Status403Forbidden);
 
     private static Dictionary<string, string[]> IdentityErrors(IdentityResult result) =>
         result.Errors.GroupBy(error => error.Code).ToDictionary(group => group.Key, group => group.Select(error => error.Description).ToArray());
