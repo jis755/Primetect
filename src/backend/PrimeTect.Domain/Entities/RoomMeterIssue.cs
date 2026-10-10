@@ -31,20 +31,60 @@ public sealed class RoomMeterIssue
         Description = description.Trim();
         ObservedDate = observedDate;
         Status = RoomMeterIssueStatus.Open;
+        Target = RoomMeterIssueTarget.Unit;
         Version = 1;
         CreatedAtUtc = DateTimeOffset.UtcNow;
         LastChangedAtUtc = CreatedAtUtc;
         LastChangedByUserId = reporterUserId;
     }
 
+    public static RoomMeterIssue CreateFeedback(
+        Guid organizationId,
+        Guid propertyId,
+        Guid? unitId,
+        Guid reporterUserId,
+        string description)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            throw new ArgumentException("A feedback or complaint note is required.", nameof(description));
+        }
+
+        if (description.Trim().Length > 2000)
+        {
+            throw new ArgumentException("The feedback or complaint note cannot exceed 2000 characters.", nameof(description));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        return new RoomMeterIssue
+        {
+            Id = Guid.NewGuid(),
+            OrganizationId = organizationId,
+            PropertyId = propertyId,
+            UnitId = unitId,
+            ReporterUserId = reporterUserId,
+            IssueType = null,
+            Description = description.Trim(),
+            ObservedDate = null,
+            Target = unitId.HasValue ? RoomMeterIssueTarget.Unit : RoomMeterIssueTarget.BuildingCommonArea,
+            Status = RoomMeterIssueStatus.Open,
+            Version = 1,
+            CreatedAtUtc = now,
+            LastChangedAtUtc = now,
+            LastChangedByUserId = reporterUserId,
+        };
+    }
+
     public Guid Id { get; private set; }
     public Guid OrganizationId { get; private set; }
     public Guid PropertyId { get; private set; }
-    public Guid UnitId { get; private set; }
+    public Guid? UnitId { get; private set; }
     public Guid ReporterUserId { get; private set; }
-    public RoomMeterIssueType IssueType { get; private set; }
+    public RoomMeterIssueType? IssueType { get; private set; }
     public string Description { get; private set; } = string.Empty;
-    public DateOnly ObservedDate { get; private set; }
+    public DateOnly? ObservedDate { get; private set; }
+
+    public RoomMeterIssueTarget Target { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public RoomMeterIssueStatus Status { get; private set; }
     public long Version { get; private set; }

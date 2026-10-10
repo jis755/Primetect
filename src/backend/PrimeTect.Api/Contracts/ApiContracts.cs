@@ -176,19 +176,36 @@ public sealed record RoomMeterIssueAuditResponse(
 public sealed record RoomMeterIssueResponse(
     Guid Id,
     Guid PropertyId,
-    Guid UnitId,
+    Guid? UnitId,
     string UnitName,
     string? FloorName,
     Guid ReporterUserId,
     string ReporterName,
-    RoomMeterIssueType IssueType,
+    RoomMeterIssueType? IssueType,
     string Description,
-    DateOnly ObservedDate,
+    DateOnly? ObservedDate,
     DateTimeOffset CreatedAtUtc,
     RoomMeterIssueStatus Status,
     long Version,
     string? ResolutionReason,
-    IReadOnlyList<RoomMeterIssueAuditResponse> Audit);
+    IReadOnlyList<RoomMeterIssueAuditResponse> Audit,
+    RoomMeterIssueTarget Target,
+    bool IsFeedback);
+
+public sealed record FeedbackReportCreateRequest(Guid? UnitId, string Note);
+
+public sealed record NotificationResponse(
+    Guid Id,
+    Guid RoomMeterIssueId,
+    Guid PropertyId,
+    Guid? UnitId,
+    string Title,
+    string PropertyName,
+    string UnitLabel,
+    string TimeZoneId,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? ReadAtUtc,
+    bool IsRead);
 
 public sealed record MeterRoomOverviewResponse(
     Guid UnitId,

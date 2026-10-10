@@ -45,6 +45,8 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<RoomMeterIssueAuditEntry> RoomMeterIssueAuditEntries => Set<RoomMeterIssueAuditEntry>();
 
+    public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
+
     public DbSet<OrganizationRolePermission> OrganizationRolePermissions => Set<OrganizationRolePermission>();
 
     public DbSet<OrganizationAuditEntry> OrganizationAuditEntries => Set<OrganizationAuditEntry>();
@@ -291,9 +293,10 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
         {
             entity.ToTable("room_meter_issues");
             entity.HasKey(issue => issue.Id);
-            entity.Property(issue => issue.IssueType).HasConversion<string>().HasMaxLength(40).IsRequired();
+            entity.Property(issue => issue.IssueType).HasConversion<string>().HasMaxLength(40);
             entity.Property(issue => issue.Description).HasMaxLength(2000).IsRequired();
             entity.Property(issue => issue.ObservedDate).HasColumnType("date");
+            entity.Property(issue => issue.Target).HasConversion<string>().HasMaxLength(40).IsRequired();
             entity.Property(issue => issue.Status).HasConversion<string>().HasMaxLength(30).IsRequired();
             entity.Property(issue => issue.Version).IsConcurrencyToken();
             entity.Property(issue => issue.ResolutionReason).HasMaxLength(500);
@@ -313,6 +316,17 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(audit => audit.AfterJson).HasColumnType("text");
             entity.HasIndex(audit => new { audit.OrganizationId, audit.RoomMeterIssueId, audit.OccurredAtUtc });
             entity.HasOne<RoomMeterIssue>().WithMany().HasForeignKey(audit => audit.RoomMeterIssueId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UserNotification>(entity =>
+        {
+            entity.ToTable("user_notifications");
+            entity.HasKey(notification => notification.Id);
+            entity.Property(notification => notification.CreatedAtUtc).IsRequired();
+            entity.HasIndex(notification => new { notification.OrganizationId, notification.RecipientUserId, notification.CreatedAtUtc });
+            entity.HasIndex(notification => new { notification.OrganizationId, notification.RecipientUserId, notification.RoomMeterIssueId }).IsUnique();
+            entity.HasOne<Property>().WithMany().HasForeignKey(notification => notification.PropertyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<RoomMeterIssue>().WithMany().HasForeignKey(notification => notification.RoomMeterIssueId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

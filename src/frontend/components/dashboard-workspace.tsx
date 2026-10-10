@@ -52,7 +52,8 @@ type CollectionUnitOverview = { unitId: string; unitName: string; floorName: str
 type CollectionOverview = { propertyId: string; billingMonth: string; billingCycleId: string | null; billingCoverage: "Approved" | "Unapproved" | "Missing"; units: CollectionUnitOverview[]; billedTotal: number; pendingReportedTotal: number; confirmedCollectedTotal: number; outstandingTotal: number; pendingReversalTotal: number };
 type MeterRoomOverview = { unitId: string; unitName: string; floorName: string | null; electricityApplicable: boolean; previousReading: number | null; previousReadingDate: string | null; currentReading: number | null; currentReadingDate: string | null; consumptionUnits: number | null; electricityAmount: number | null; electricityRate: number | null; readingStatus: "NotApplicable" | "NoDraft" | "Missing" | "SavedDraft" | "AwaitingReview" | "Returned" | "Approved"; blockingReason: string | null; reportedIssueCount: number; openIssueCount: number };
 type MeterOverview = { propertyId: string; billingMonth: string; billingCycleId: string | null; billingCycleStatus: BillingCycleStatus | null; units: MeterRoomOverview[] };
-type RoomMeterIssue = { id: string; propertyId: string; unitId: string; unitName: string; floorName: string | null; reporterUserId: string; reporterName: string; issueType: "DamagedMeter" | "UnreadableMeter" | "RoomMaintenance" | "Other"; description: string; observedDate: string; createdAtUtc: string; status: "Open" | "Acknowledged" | "Resolved"; version: number; resolutionReason: string | null; audit: { id: string; actorUserId: string; action: string; occurredAtUtc: string; reason: string | null; before: string | null; after: string | null }[] };
+type RoomMeterIssue = { id: string; propertyId: string; unitId: string | null; unitName: string; floorName: string | null; reporterUserId: string; reporterName: string; issueType: "DamagedMeter" | "UnreadableMeter" | "RoomMaintenance" | "Other" | null; description: string; observedDate: string | null; createdAtUtc: string; status: "Open" | "Acknowledged" | "Resolved"; version: number; resolutionReason: string | null; target: "Unit" | "BuildingCommonArea"; isFeedback: boolean; audit: { id: string; actorUserId: string; action: string; occurredAtUtc: string; reason: string | null; before: string | null; after: string | null }[] };
+type Notification = { id: string; roomMeterIssueId: string; propertyId: string; unitId: string | null; title: string; propertyName: string; unitLabel: string; timeZoneId: string; createdAtUtc: string; readAtUtc: string | null; isRead: boolean };
 type RolePermissionConfiguration = { role: Exclude<UserRole, "Admin">; permissions: Record<PermissionKey, boolean> };
 
 const propertyTypeLabels: Record<PropertyType, string> = { ApartmentBuilding: "Apartment building", IndividualRoomBuilding: "Individual-room building", Shop: "Shops" };
@@ -72,6 +73,58 @@ function hasPermission(session: Session, permission: PermissionKey) { return ses
 
 export function DashboardWorkspace() {
   return <LanguageProvider><DashboardWorkspaceContent /></LanguageProvider>;
+}
+
+function NotificationBell({ permissions, isAdmin, onOpenReport }: { permissions?: Partial<Record<PermissionKey, boolean>>; isAdmin?: boolean; onOpenReport: (propertyId: string) => void }) {
+  const { text, error: localizedError } = useLanguage();
+  const canView = Boolean(isAdmin || permissions?.ReviewRoomMeterIssues === true);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState("");
+
+  async function load() {
+    if (!canView) return;
+    try {
+      setNotifications(await apiFetch<Notification[]>("/api/notifications"));
+      setError("");
+    } catch (caught) {
+      setError(localizedError(caught, "Could not load notifications."));
+    }
+  }
+
+  useEffect(() => { void load(); }, [canView]);
+
+  async function openNotification(notification: Notification) {
+    if (busyId === notification.id) return;
+    setBusyId(notification.id);
+    try {
+      if (!notification.isRead) {
+        await apiFetch(`/api/notifications/${notification.id}/read`, { method: "POST" });
+        setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, isRead: true, readAtUtc: new Date().toISOString() } : item));
+      }
+      setOpen(false);
+      onOpenReport(notification.propertyId);
+    } catch (caught) {
+      setError(localizedError(caught, "Could not open this notification."));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  if (!canView) return null;
+  const unread = notifications.filter((notification) => !notification.isRead).length;
+  return <div className="relative">
+    <button type="button" aria-label={text("Notifications", "নোটিফিকেশন")} onClick={() => { setOpen((value) => !value); void load(); }} className="relative min-h-11 min-w-11 rounded-full border border-ink/15 bg-white px-3 py-2 text-base font-bold text-ink hover:bg-mint/40">
+      <span aria-hidden="true">🔔</span><span className="sr-only">{text("Notifications", "নোটিফিকেশন")}</span>{unread > 0 && <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-black text-white">{unread}</span>}
+    </button>
+    {open && <div className="absolute right-0 z-20 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-ink/10 bg-white p-3 shadow-soft">
+      <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-black text-ink">{text("Notifications", "নোটিফিকেশন")}</h2><button type="button" onClick={() => setOpen(false)} className="min-h-9 rounded-lg px-2 text-xs font-bold text-ink/60">{text("Close", "বন্ধ")}</button></div>
+      {error && <p role="alert" className="mt-2 rounded-lg bg-rose-100 px-2 py-2 text-xs font-semibold text-rose-800">{error}</p>}
+      {notifications.length === 0 && !error && <p className="mt-3 rounded-lg border border-dashed border-ink/15 p-3 text-xs text-ink/55">{text("No notifications.", "কোনো নোটিফিকেশন নেই।")}</p>}
+      <div className="mt-2 max-h-80 space-y-2 overflow-y-auto">{notifications.map((notification) => <button key={notification.id} type="button" disabled={busyId === notification.id} onClick={() => void openNotification(notification)} className={`block min-h-14 w-full rounded-xl border p-3 text-left ${notification.isRead ? "border-ink/10 bg-white" : "border-pine/25 bg-mint/30"}`}><p className="text-sm font-bold text-ink">{notification.title}</p><p className="mt-1 text-xs text-ink/55">{notification.propertyName} · {formatPropertyDateFromUtc(notification.createdAtUtc, notification.timeZoneId)}</p></button>)}</div>
+    </div>}
+  </div>;
 }
 
 function DashboardWorkspaceContent() {
@@ -152,6 +205,7 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
   const canViewApprovedBills = isAdmin || hasPermission(session, "ViewApprovedBills");
   const canManageProperties = isAdmin || hasPermission(session, "ManageProperties");
   const canManageTenants = isAdmin || hasPermission(session, "ManageTenants");
+  const canReportIssues = isAdmin || hasPermission(session, "ReportRoomMeterIssues");
   const [selectedPropertyId, setSelectedPropertyId] = useState("all");
   const [activeView, setActiveView] = useState<"properties" | "meter-readings" | "collections" | "roles">(isAdmin ? "properties" : canReviewCollections && !canMeter && !canReportCollections ? "collections" : "properties");
   const [collectionMode, setCollectionMode] = useState<"report" | "review" | "history">(canReviewCollections && !canReportCollections ? "review" : !canReportCollections && canViewApprovedBills ? "history" : "report");
@@ -161,6 +215,7 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
   const canCollections = canReportCollections || canReviewCollections || canViewApprovedBills;
   const [meterOverviewRequest, setMeterOverviewRequest] = useState<{ propertyId: string; filter: string } | null>(null);
   const [issueOverviewRequest, setIssueOverviewRequest] = useState<{ propertyId: string; token: number } | null>(null);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   function openMeterOverview(propertyId: string, filter = "All") {
     if (!propertyId) { onError(text("Choose a property before opening a room overview.", "রুমের সারসংক্ষেপ খোলার আগে একটি সম্পত্তি বেছে নিন।")); return; }
@@ -174,6 +229,10 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
     setSelectedPropertyId(propertyId);
     setIssueOverviewRequest({ propertyId, token: Date.now() });
     setActiveView("meter-readings");
+  }
+
+  function openNotificationReport(propertyId: string) {
+    openIssueOverview(propertyId);
   }
 
   async function refresh() {
@@ -204,11 +263,11 @@ function Workspace({ session, message, error, onMessage, onError, onLogout }: { 
   const selectedProperty = contextPropertyId ? properties.find((property) => property.id === contextPropertyId) : undefined;
   const homeProperty = properties.length === 1 ? properties[0] : selectedProperty;
   return <main className="min-h-screen bg-sand">
-    <header className="border-b border-ink/10 bg-white/70 px-6 py-5 sm:px-10 lg:px-14"><div className="mx-auto flex max-w-7xl items-center justify-between gap-6"><BrandMark /><div className="flex items-center gap-3"><ApiHealth /><div className="hidden text-right sm:block"><p className="text-sm font-bold text-ink">{session.user.fullName}</p><p className="text-xs text-ink/50">{roleLabels[session.user.role]} · {session.organization.name}</p></div><button onClick={onLogout} className="min-h-11 rounded-full border border-ink/15 px-4 py-2 text-xs font-bold text-ink transition hover:bg-white">{text("Log out", "সাইন-আউট")}</button></div></div></header>
+    <header className="border-b border-ink/10 bg-white/70 px-6 py-5 sm:px-10 lg:px-14"><div className="mx-auto flex max-w-7xl items-center justify-between gap-6"><BrandMark /><div className="flex items-center gap-3"><ApiHealth /><NotificationBell permissions={session.permissions} isAdmin={isAdmin} onOpenReport={openNotificationReport} /><div className="hidden text-right sm:block"><p className="text-sm font-bold text-ink">{session.user.fullName}</p><p className="text-xs text-ink/50">{roleLabels[session.user.role]} · {session.organization.name}</p></div><button onClick={onLogout} className="min-h-11 rounded-full border border-ink/15 px-4 py-2 text-xs font-bold text-ink transition hover:bg-white">{text("Log out", "সাইন-আউট")}</button></div></div></header>
     <nav aria-label={text("Primary", "প্রধান নেভিগেশন")} className="no-print mx-auto flex max-w-7xl flex-wrap gap-2 px-6 pt-5 sm:px-10 lg:px-14">{canProperties && <button type="button" onClick={() => setActiveView("properties")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "properties" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Property overview", "সম্পত্তির সারসংক্ষেপ")}</button>}{canMeter && <button type="button" onClick={() => setActiveView("meter-readings")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "meter-readings" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Meter Readings", "মিটার রিডিং")}</button>}{canCollections && <button type="button" onClick={() => setActiveView("collections")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "collections" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Money received", "পাওয়া টাকা")}</button>}{isAdmin && <button type="button" onClick={() => setActiveView("roles")} className={`min-h-11 rounded-xl px-3 py-2 text-xs font-bold ${activeView === "roles" ? "bg-pine text-white" : "border border-ink/10 bg-white/70 text-ink/60"}`}>{text("Roles & permissions", "ভূমিকা ও অনুমতি")}</button>}</nav>
     <section className="mx-auto max-w-7xl px-6 py-10 sm:px-10 lg:px-14"><div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[0.25em] text-pine">{text("PrimeTect workspace", "PrimeTect ওয়ার্কস্পেস")}</p><h1 className="mt-3 text-4xl font-black tracking-[-0.07em] text-ink sm:text-5xl">{isAdmin ? text("Organization operations", "সংস্থার কাজ") : canReviewCollections && !canMeter && !canReportCollections ? text("Collection review", "টাকা পাওয়ার রিপোর্ট পর্যালোচনা") : text("Your assigned work", "আপনার নির্ধারিত কাজ")}</h1><p className="mt-3 max-w-2xl text-base leading-7 text-ink/55">{canReviewCollections && !canMeter && !canReportCollections ? text("Review reported receipts and reversals in assigned properties.", "নির্ধারিত সম্পত্তির পাওয়ার রিপোর্ট ও ফেরতের অনুরোধ পর্যালোচনা করুন।") : text("Use the short task screens to finish monthly work.", "সহজ কাজের স্ক্রিনে মাসের কাজ শেষ করুন।")}</p></div><div className="flex flex-wrap items-end gap-3">{(canProperties || canCollections) && (properties.length === 1 ? <div className="rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-sm font-bold text-ink"><span className="mr-2 text-xs font-bold text-ink/50">{text("Property", "সম্পত্তি")}</span>{properties[0]?.name ?? text("No assigned property", "কোনো নির্ধারিত সম্পত্তি নেই")}</div> : <label className="text-sm font-bold text-ink">{text("Property", "সম্পত্তি")}<select value={activeView === "properties" ? selectedPropertyId : contextPropertyId === "all" ? "" : contextPropertyId} onChange={(event) => setSelectedPropertyId(event.target.value || "all")} className="mt-1 block min-w-48 min-h-11 rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-base font-normal">{activeView === "properties" && <option value="all">{text("All assigned properties", "সব নির্ধারিত সম্পত্তি")}</option>}{activeView !== "properties" && <option value="">{text("Choose a property", "সম্পত্তি বেছে নিন")}</option>}{properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}</select></label>)}{(activeView === "meter-readings" || activeView === "collections") && <label className="text-sm font-bold text-ink">{text("Billing month", "বিলের মাস")}<input type="month" value={billingMonth} onChange={(event) => setBillingMonth(event.target.value)} className="mt-1 block min-h-11 rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-base font-normal" /></label>}<span className="rounded-full bg-mint px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-pine">{busy ? text("Refreshing", "নতুন তথ্য লোড হচ্ছে") : text("Ready", "প্রস্তুত")}</span></div></div>{message && <Notice tone="success" message={message} onClose={() => onMessage("")} />}{error && <Notice tone="error" message={error} onClose={() => onError("")} />}
       {activeView === "roles" && isAdmin && <RolePermissionWorkspace onError={onError} onMessage={onMessage} />}
-       {activeView === "properties" && <>{!isAdmin && <RoleActionCards role={session.user.role} permissions={session.permissions} property={homeProperty} month={billingMonth} onMeter={() => setActiveView("meter-readings")} onCollections={() => { setCollectionMode("report"); setActiveView("collections"); }} onProblem={() => { if (homeProperty) openIssueOverview(homeProperty.id); else onMessage(text("Choose a property before reporting a problem.", "সমস্যা জানানোর আগে একটি সম্পত্তি বেছে নিন।")); }} onViewAll={() => homeProperty ? openMeterOverview(homeProperty.id) : onError(text("Choose a property to view rooms.", "রুম দেখতে একটি সম্পত্তি বেছে নিন।"))} onUnfinished={() => homeProperty ? openMeterOverview(homeProperty.id, "Missing") : onError(text("Choose a property to view unfinished rooms.", "বাকি রুম দেখতে একটি সম্পত্তি বেছে নিন।"))} />}{isAdmin && <AdminOverviewWorkspace properties={properties} selectedPropertyId={selectedPropertyId} month={billingMonth} onSelectProperty={setSelectedPropertyId} onViewRooms={(propertyId) => openMeterOverview(propertyId)} onViewMissing={(propertyId) => openMeterOverview(propertyId, "Missing")} onReviewCollections={(propertyId) => { setSelectedPropertyId(propertyId); setCollectionMode("review"); setActiveView("collections"); }} onViewIssues={openIssueOverview} onError={onError} />}{canProperties && <div className="mt-10 space-y-5">{visibleProperties.length === 0 ? <EmptyState role={session.user.role} /> : visibleProperties.map((property) => <PropertyCard key={property.id} property={property} tenants={tenants} role={session.user.role} permissions={session.permissions} canEdit={isAdmin || canManageProperties || canManageTenants} onRefresh={refresh} onError={onError} onMessage={onMessage} onOccupancyStatus={updateOccupancyStatus} onUnitUpdate={updateUnit} onViewRooms={() => openMeterOverview(property.id)} />)}{canManageProperties && selectedPropertyId === "all" && <PropertySetup onSaved={refresh} onError={onError} onMessage={onMessage} />}</div>}</>}
+      {activeView === "properties" && <>{!isAdmin && <RoleActionCards role={session.user.role} permissions={session.permissions} property={homeProperty} month={billingMonth} onMeter={() => setActiveView("meter-readings")} onCollections={() => { setCollectionMode("report"); setActiveView("collections"); }} onProblem={() => setFeedbackOpen(true)} onViewAll={() => homeProperty ? openMeterOverview(homeProperty.id) : onError(text("Choose a property to view rooms.", "রুম দেখতে একটি সম্পত্তি বেছে নিন।"))} onUnfinished={() => homeProperty ? openMeterOverview(homeProperty.id, "Missing") : onError(text("Choose a property to view unfinished rooms.", "বাকি রুম দেখতে একটি সম্পত্তি বেছে নিন।"))} />}{isAdmin && <AdminOverviewWorkspace properties={properties} selectedPropertyId={selectedPropertyId} month={billingMonth} onSelectProperty={setSelectedPropertyId} onViewRooms={(propertyId) => openMeterOverview(propertyId)} onViewMissing={(propertyId) => openMeterOverview(propertyId, "Missing")} onReviewCollections={(propertyId) => { setSelectedPropertyId(propertyId); setCollectionMode("review"); setActiveView("collections"); }} onViewIssues={openIssueOverview} onError={onError} />}{canReportIssues && <RoomMeterIssueReporter properties={properties} selectedPropertyId={contextPropertyId} permissions={session.permissions} onError={onError} onMessage={onMessage} openRequest={feedbackOpen ? 1 : undefined} onClose={() => setFeedbackOpen(false)} />}{canProperties && <div className="mt-10 space-y-5">{visibleProperties.length === 0 ? <EmptyState role={session.user.role} /> : visibleProperties.map((property) => <PropertyCard key={property.id} property={property} tenants={tenants} role={session.user.role} permissions={session.permissions} canEdit={isAdmin || canManageProperties || canManageTenants} onRefresh={refresh} onError={onError} onMessage={onMessage} onOccupancyStatus={updateOccupancyStatus} onUnitUpdate={updateUnit} onViewRooms={() => openMeterOverview(property.id)} />)}{canManageProperties && selectedPropertyId === "all" && <PropertySetup onSaved={refresh} onError={onError} onMessage={onMessage} />}</div>}</>}
       {activeView === "meter-readings" && canMeter && <MeterReadingsWorkspace properties={properties} selectedPropertyId={contextPropertyId} month={billingMonth} role={session.user.role} permissions={session.permissions} onError={onError} onMessage={onMessage} overviewRequest={meterOverviewRequest?.propertyId === contextPropertyId ? meterOverviewRequest : null} issueRequest={issueOverviewRequest?.propertyId === contextPropertyId ? issueOverviewRequest.token : undefined} />}
       {activeView === "collections" && canCollections && <div className="mt-6 flex flex-wrap gap-2" role="tablist" aria-label={text("Money received tasks", "পাওয়া টাকার কাজ")}><button type="button" onClick={() => setCollectionMode("report")} disabled={!canReportCollections} className={`min-h-11 rounded-xl px-4 py-3 text-sm font-bold ${collectionMode === "report" && canReportCollections ? "bg-pine text-white" : "border border-ink/15 bg-white text-ink/65 disabled:opacity-50"}`}>{text("Report money received", "পাওয়া টাকার হিসাব দিন")}</button><button type="button" onClick={() => setCollectionMode("review")} disabled={!canReviewCollections} className={`min-h-11 rounded-xl px-4 py-3 text-sm font-bold ${collectionMode === "review" && canReviewCollections ? "bg-pine text-white" : "border border-ink/15 bg-white text-ink/65 disabled:opacity-50"}`}>{text("Review reports", "রিপোর্ট পর্যালোচনা")}</button><button type="button" onClick={() => setCollectionMode("history")} disabled={!canViewApprovedBills} className={`min-h-11 rounded-xl px-4 py-3 text-sm font-bold ${collectionMode === "history" && canViewApprovedBills ? "bg-pine text-white" : "border border-ink/15 bg-white text-ink/65 disabled:opacity-50"}`}>{text("View history", "ইতিহাস দেখুন")}</button></div>}
       {activeView === "collections" && collectionMode === "review" && canReviewCollections && <CollectionReviewWorkspaceSimple properties={properties} selectedPropertyId={contextPropertyId} month={billingMonth} role={isAdmin ? "Admin" : "FinanceManager"} currentUserId={session.user.id} onError={onError} onMessage={onMessage} />}
@@ -288,7 +347,7 @@ function LegacyRoleActionCards({ role, permissions: rawPermissions, property, mo
   const canCollections = permissions?.ReportCollections === true;
   if (role === "FinanceManager" && permissions?.ReviewCollections === true) return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{text("Finance manager", "ফাইন্যান্স ম্যানেজার")}</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">{text("Review confirmed receipts", "নিশ্চিত পাওয়ার রিপোর্ট পর্যালোচনা করুন")}</h2><p className="mt-2 max-w-2xl text-base leading-7 text-ink/55">{text("Review manual collection reports in assigned properties. Approval confirms reported money only; it does not approve the bill or verify a bank/provider payment.", "নির্ধারিত সম্পত্তির হাতে পাওয়ার রিপোর্ট পর্যালোচনা করুন। অনুমোদন শুধু রিপোর্ট করা টাকা নিশ্চিত করে; বিল অনুমোদন বা ব্যাংক/প্রোভাইডার যাচাই করে না।")}</p>{permissions?.ReviewCollections === true && <button type="button" onClick={onCollections} className="mt-5 min-h-12 rounded-xl bg-pine px-5 py-3 text-base font-bold text-white">{text("Review collections", "পাওয়ার রিপোর্ট পর্যালোচনা")}</button>}</section>;
   if (!canMeter && !canCollections && permissions?.ReportRoomMeterIssues !== true) return null;
-  return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{role === "Manager" ? text("Building manager", "বিল্ডিং ম্যানেজার") : text("Building staff", "বিল্ডিং স্টাফ")} {text("actions", "এর কাজ")}</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">{text("Your next tasks", "আপনার পরের কাজ")}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">{text("Choose a task. Saved readings are drafts until separately submitted for review.", "একটি কাজ বেছে নিন। সেভ করা রিডিং আলাদা করে পর্যালোচনার জন্য পাঠানো না হলে খসড়া থাকে।")}</p><div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{canMeter && <button type="button" onClick={onMeter} className="min-h-14 rounded-xl bg-pine px-4 py-3 text-left text-sm font-bold text-white"><span className="block text-base">{text("Enter meter reading", "মিটার রিডিং দিন")}</span><span className="mt-1 block text-xs font-normal text-white/75">{text("Save a room and continue to the next one", "একটি রুম সেভ করে পরের রুমে যান")}</span></button>}{canCollections && <button type="button" onClick={onCollections} className="min-h-14 rounded-xl border border-pine/25 bg-white px-4 py-3 text-left text-sm font-bold text-pine"><span className="block text-base">{text("Report money received", "টাকা পাওয়া লিখুন")}</span><span className="mt-1 block text-xs font-normal text-ink/55">{text("Send a full or partial receipt for approval", "পুরো বা আংশিক পাওয়ার রিপোর্ট অনুমোদনের জন্য পাঠান")}</span></button>}{permissions?.ReportRoomMeterIssues !== false && <button type="button" onClick={onProblem} className="min-h-14 rounded-xl border border-ink/15 bg-sand/60 px-4 py-3 text-left text-sm font-bold text-ink"><span className="block text-base">{text("Report a problem", "সমস্যা জানান")}</span><span className="mt-1 block text-xs font-normal text-ink/55">{text("Keep the issue separate from the reading", "সমস্যার রিপোর্ট রিডিং থেকে আলাদা রাখুন")}</span></button>}</div></section>;
+  return <section className="mt-8 rounded-[2rem] border border-pine/20 bg-white/70 p-5 shadow-soft sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{role === "Manager" ? text("Building manager", "বিল্ডিং ম্যানেজার") : text("Building staff", "বিল্ডিং স্টাফ")} {text("actions", "এর কাজ")}</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">{text("Your next tasks", "আপনার পরের কাজ")}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">{text("Choose a task. Saved readings are drafts until separately submitted for review.", "একটি কাজ বেছে নিন। সেভ করা রিডিং আলাদা করে পর্যালোচনার জন্য পাঠানো না হলে খসড়া থাকে।")}</p><div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{canMeter && <button type="button" onClick={onMeter} className="min-h-14 rounded-xl bg-pine px-4 py-3 text-left text-sm font-bold text-white"><span className="block text-base">{text("Enter meter reading", "মিটার রিডিং দিন")}</span><span className="mt-1 block text-xs font-normal text-white/75">{text("Save a room and continue to the next one", "একটি রুম সেভ করে পরের রুমে যান")}</span></button>}{canCollections && <button type="button" onClick={onCollections} className="min-h-14 rounded-xl border border-pine/25 bg-white px-4 py-3 text-left text-sm font-bold text-pine"><span className="block text-base">{text("Report money received", "টাকা পাওয়া লিখুন")}</span><span className="mt-1 block text-xs font-normal text-ink/55">{text("Send a full or partial receipt for approval", "পুরো বা আংশিক পাওয়ার রিপোর্ট অনুমোদনের জন্য পাঠান")}</span></button>}{permissions?.ReportRoomMeterIssues !== false && <button type="button" onClick={onProblem} className="min-h-14 rounded-xl border border-ink/15 bg-sand/60 px-4 py-3 text-left text-sm font-bold text-ink"><span className="block text-base">{text("Feedback / Report", "ফিডব্যাক / রিপোর্ট")}</span><span className="mt-1 block text-xs font-normal text-ink/55">{text("Send a note without changing readings or billing", "রিডিং বা বিল না বদলে একটি নোট পাঠান")}</span></button>}</div></section>;
 }
 
 function StaffProgressSummary({ property, month, permissions, onViewAll, onUnfinished }: { property?: Property; month: string; permissions?: Partial<Record<PermissionKey, boolean>>; onViewAll: () => void; onUnfinished: () => void }) {
@@ -730,11 +789,12 @@ function MeterReadingsWorkspace({ properties, selectedPropertyId, month, role, p
   const { text } = useLanguage();
   const availableProperties = properties.filter((property) => !property.isArchived);
   const [unitSearch, setUnitSearch] = useState("");
+  const [currentUnitId, setCurrentUnitId] = useState<string | null>(null);
   const effectivePropertyId = selectedPropertyId ?? availableProperties[0]?.id ?? "";
   const effectiveMonth = month ?? currentMonthInput(availableProperties[0]?.timeZoneId);
   const property = availableProperties.find((candidate) => candidate.id === effectivePropertyId);
   if (!property) return <section className="mt-6 rounded-2xl border border-dashed border-ink/20 bg-white/40 p-6 text-sm text-ink/55">{text("No accessible property is available for meter readings.", "মিটার রিডিংয়ের জন্য কোনো অনুমোদিত সম্পত্তি নেই।")}</section>;
-  return <section className="mt-6 rounded-[2rem] border border-pine/20 bg-white/60 p-5 shadow-soft sm:p-8"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-pine">{text("Dedicated monthly entry", "মাসিক মিটার এন্ট্রি")}</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">{text("Meter Readings", "মিটার রিডিং")}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">{text("Enter one room at a time, or use View all rooms to review every accessible unit. Fixed-charge-only rooms are not missing readings.", "একটি করে রুমে রিডিং দিন, অথবা সব রুম দেখুন থেকে সব অনুমোদিত ইউনিট পর্যালোচনা করুন। শুধু নির্দিষ্ট চার্জের রুমে রিডিং অনুপস্থিত ধরা হয় না।")}</p></div><p className="rounded-xl bg-mint/50 px-3 py-2 text-xs font-bold text-pine">{property.name} · {text("Billing month", "বিলের মাস")} {effectiveMonth}</p></div><BillingPanel property={property} month={effectiveMonth} role={role} permissions={permissions} onError={onError} onMessage={onMessage} meterOnly unitSearchQuery={unitSearch} onUnitSearchChange={setUnitSearch} /><RoomMeterIssueReporter property={property} permissions={permissions} onError={onError} onMessage={onMessage} openRequest={issueRequest} /><MeterOverviewWorkspace property={property} month={effectiveMonth} permissions={permissions} onError={onError} initialRequest={overviewRequest} /></section>;
+  return <section className="mt-6 rounded-[2rem] border border-pine/20 bg-white/60 p-5 shadow-soft sm:p-8"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-pine">{text("Dedicated monthly entry", "মাসিক মিটার এন্ট্রি")}</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">{text("Meter Readings", "মিটার রিডিং")}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-ink/55">{text("Enter one room at a time, or use View all rooms to review every accessible unit. Fixed-charge-only rooms are not missing readings.", "একটি করে রুমে রিডিং দিন, অথবা সব রুম দেখুন থেকে সব অনুমোদিত ইউনিট পর্যালোচনা করুন। শুধু নির্দিষ্ট চার্জের রুমে রিডিং অনুপস্থিত ধরা হয় না।")}</p></div><p className="rounded-xl bg-mint/50 px-3 py-2 text-xs font-bold text-pine">{property.name} · {text("Billing month", "বিলের মাস")} {effectiveMonth}</p></div><BillingPanel property={property} month={effectiveMonth} role={role} permissions={permissions} onError={onError} onMessage={onMessage} meterOnly unitSearchQuery={unitSearch} onUnitSearchChange={setUnitSearch} onCurrentUnitChange={setCurrentUnitId} /><FeedbackReportWorkspace property={property} permissions={permissions} onError={onError} onMessage={onMessage} openRequest={issueRequest} lockedUnitId={currentUnitId} /><MeterOverviewWorkspace property={property} month={effectiveMonth} permissions={permissions} onError={onError} initialRequest={overviewRequest} /></section>;
 }
 
 function LegacyMeterReadingsWorkspaceOld({ properties, role: providedRole, permissions, onError, onMessage }: { properties: Property[]; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void }) {
@@ -1081,14 +1141,15 @@ function ChargeEditor({ propertyId, unitId, scope, onError, onMessage }: { prope
   </section>;
 }
 
-function RoomMeterIssueReporter({ property, permissions, onError, onMessage, openRequest }: { property: Property; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; openRequest?: number }) {
+function LegacyRoomMeterIssueReporter({ property, permissions, onError, onMessage, openRequest }: { property: Property; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; openRequest?: number }) {
   const { text, error: localizedError } = useLanguage();
   const canReport = permissions === undefined || permissions.ReportRoomMeterIssues === true;
   const canReview = permissions?.ReviewRoomMeterIssues === true;
   const units = property.floors.flatMap((floor) => floor.units.filter((unit) => unit.isEnabled && !unit.isArchived).map((unit) => ({ ...unit, floorName: floor.name })));
   const [open, setOpen] = useState(false);
   const [unitId, setUnitId] = useState(units[0]?.id ?? "");
-  const [issueType, setIssueType] = useState<RoomMeterIssue["issueType"]>("DamagedMeter");
+  const [issueType, setIssueTypeState] = useState<Exclude<RoomMeterIssue["issueType"], null>>("DamagedMeter");
+  const setIssueType = (value: RoomMeterIssue["issueType"]) => setIssueTypeState(value ?? "Other");
   const [description, setDescription] = useState("");
   const [observedDate, setObservedDate] = useState(currentDateInput(property.timeZoneId));
   const [issues, setIssues] = useState<RoomMeterIssue[]>([]);
@@ -1129,6 +1190,124 @@ function RoomMeterIssueReporter({ property, permissions, onError, onMessage, ope
   if (!canReport && !canReview) return null;
   return <section className="mt-5 border-t-2 border-dashed border-ink/15 pt-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-black text-ink">{text("Room and meter issues", "রুম বা মিটারের সমস্যা")}</h3><p className="mt-1 text-sm text-ink/55">{text("Report a problem separately. This never creates a reading or changes billing.", "সমস্যা আলাদাভাবে জানান। এতে কোনো রিডিং তৈরি বা বিল পরিবর্তন হয় না।")}</p></div><button type="button" disabled={!canReport && !canReview} onClick={() => { setOpen((value) => !value); setObservedDate(currentDateInput(property.timeZoneId)); void loadIssues(); }} className="min-h-11 rounded-xl border border-sun/60 bg-sun/15 px-4 py-3 text-sm font-bold text-ink">{text(canReport ? "Report a room/meter issue" : "View room/meter issues", canReport ? "রুম বা মিটারের সমস্যা জানান" : "রুম বা মিটারের সমস্যা দেখুন")}</button></div>{localError && <p role="alert" className="mt-3 rounded-lg bg-rose-100 px-3 py-2 text-xs font-semibold text-rose-800">{localError}</p>}{open && canReport && <form onSubmit={submit} className="mt-4 grid gap-3 rounded-2xl border border-sun/40 bg-sun/10 p-4 sm:grid-cols-2"><p className="sm:col-span-2 text-xs font-semibold text-ink/65">{text(`Selected property: ${property.name}. This is a separate issue report.`, `নির্বাচিত সম্পত্তি: ${property.name}। এটি আলাদা সমস্যা রিপোর্ট।`)}</p><label className="text-sm font-bold text-ink">{text("Unit", "ইউনিট")}<select value={unitId} onChange={(event) => setUnitId(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal">{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} · {unit.floorName}</option>)}</select></label><label className="text-sm font-bold text-ink">{text("Issue type", "সমস্যার ধরন")}<select value={issueType} onChange={(event) => setIssueType(event.target.value as RoomMeterIssue["issueType"])} className="mt-1 block min-h-11 w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal"><option value="DamagedMeter">{text("Damaged meter", "মিটার নষ্ট")}</option><option value="UnreadableMeter">{text("Unreadable meter", "মিটার পড়া যাচ্ছে না")}</option><option value="RoomMaintenance">{text("Room maintenance", "রুম রক্ষণাবেক্ষণ")}</option><option value="Other">{text("Other", "অন্যান্য")}</option></select></label><label className="text-sm font-bold text-ink sm:col-span-2">{text("Issue description", "সমস্যার বর্ণনা")}<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={4} className="mt-1 block w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal" placeholder={text("Describe what was observed", "কী দেখা গেছে লিখুন")} required /></label><label className="text-sm font-bold text-ink">{text("Observed date", "দেখার তারিখ")}<input type="date" value={observedDate} onChange={(event) => setObservedDate(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal" required /></label><div className="flex items-end gap-2"><button type="submit" disabled={busy} className="min-h-11 rounded-xl bg-pine px-4 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? text("Sending…", "পাঠানো হচ্ছে…") : text("Send issue report", "সমস্যার রিপোর্ট পাঠান")}</button><button type="button" onClick={() => setOpen(false)} className="min-h-11 rounded-xl border border-ink/15 px-4 py-3 text-sm font-bold text-ink">{text("Cancel", "বাতিল")}</button></div></form>}{canReview && <div className="mt-4 space-y-2">{issues.map((issue) => <article key={issue.id} className="rounded-xl border border-ink/10 bg-white p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-bold text-ink">{issue.unitName} · {issueTypeLabel(issue.issueType, text)}</p><p className="mt-1 text-xs text-ink/55">{issue.description} · {text("observed", "দেখা হয়েছে")} {issue.observedDate} · {text("reported by", "রিপোর্ট করেছেন")} {issue.reporterName}</p></div><span className="rounded-full bg-sand px-2.5 py-1 text-xs font-bold text-ink">{issue.status}</span></div><div className="mt-3 flex flex-wrap gap-2">{issue.status === "Open" && <button type="button" disabled={busy} onClick={() => void changeIssue(issue, "acknowledge")} className="min-h-10 rounded-lg border border-pine/20 px-3 py-2 text-xs font-bold text-pine">{text("Acknowledge", "গ্রহণ নিশ্চিত করুন")}</button>}{issue.status !== "Resolved" && <button type="button" disabled={busy} onClick={() => void changeIssue(issue, "resolve")} className="min-h-10 rounded-lg bg-pine px-3 py-2 text-xs font-bold text-white">{text("Resolve", "সমাধান হয়েছে")}</button>}</div></article>)}</div>}</section>;
 }
+
+function RoomMeterIssueReporter({ properties = [], property, selectedPropertyId, permissions, onError, onMessage, openRequest, lockedUnitId, onClose, lockToCurrentRoom, listOnly: _listOnly }: { properties?: Property[]; property?: Property; selectedPropertyId?: string; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; openRequest?: number; lockedUnitId?: string | null; onClose?: () => void; lockToCurrentRoom?: boolean; listOnly?: boolean }) {
+  const { text, error: localizedError } = useLanguage();
+  const availableProperties = (property ? [property] : properties).filter((candidate) => !candidate.isArchived);
+  const canReport = permissions === undefined || permissions.ReportRoomMeterIssues === true;
+  const canReview = permissions?.ReviewRoomMeterIssues === true;
+  const [propertyId, setPropertyId] = useState(selectedPropertyId && selectedPropertyId !== "all" ? selectedPropertyId : property?.id ?? availableProperties[0]?.id ?? "");
+  const [open, setOpen] = useState(Boolean(openRequest));
+  const [showReports, setShowReports] = useState(Boolean(openRequest));
+  const [target, setTarget] = useState(lockedUnitId ?? "");
+  const [note, setNote] = useState("");
+  const [reports, setReports] = useState<RoomMeterIssue[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
+
+  const selectedProperty = availableProperties.find((candidate) => candidate.id === propertyId);
+  const units = selectedProperty?.floors.flatMap((floor) => floor.units.filter((unit) => unit.isEnabled && !unit.isArchived).map((unit) => ({ ...unit, floorName: floor.name }))) ?? [];
+  const selectedUnit = units.find((unit) => unit.id === (lockedUnitId ?? currentRoomId ?? target));
+  const effectiveLockedUnitId = lockedUnitId ?? (lockToCurrentRoom ? currentRoomId : null);
+  const isLockedToUnit = Boolean(effectiveLockedUnitId);
+
+  useEffect(() => {
+    if (!lockToCurrentRoom) return;
+    const onCurrentRoom = (event: Event) => {
+      const unitId = (event as CustomEvent<{ unitId?: string }>).detail?.unitId;
+      setCurrentRoomId(unitId ?? null);
+    };
+    window.addEventListener("primetect:current-meter-unit", onCurrentRoom);
+    return () => window.removeEventListener("primetect:current-meter-unit", onCurrentRoom);
+  }, [lockToCurrentRoom]);
+
+  useEffect(() => {
+    const nextPropertyId = selectedPropertyId && selectedPropertyId !== "all" && availableProperties.some((candidate) => candidate.id === selectedPropertyId)
+      ? selectedPropertyId
+      : property?.id ?? availableProperties[0]?.id ?? "";
+    setPropertyId(nextPropertyId);
+  }, [property?.id, selectedPropertyId, properties]);
+
+  useEffect(() => {
+    if (effectiveLockedUnitId) setTarget(effectiveLockedUnitId);
+    else if (!target || !units.some((unit) => unit.id === target)) setTarget("");
+  }, [effectiveLockedUnitId, propertyId, units.map((unit) => unit.id).join(",")]);
+
+  useEffect(() => {
+    if (openRequest !== undefined) {
+      setOpen(true);
+      setShowReports(true);
+      void loadReports();
+    }
+  }, [openRequest]);
+
+  async function loadReports() {
+    if (!selectedProperty) return;
+    try {
+      setReports(await apiFetch<RoomMeterIssue[]>(`/api/properties/${selectedProperty.id}/room-meter-issues`));
+      setLocalError("");
+    } catch (caught) {
+      setLocalError(localizedError(caught, "Could not load feedback and reports."));
+    }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    if (!selectedProperty || (!isLockedToUnit && !target) || !note.trim()) {
+      setLocalError(text("Choose an authorized unit or Building/Common Area and enter a note.", "অনুমোদিত ইউনিট বা বিল্ডিং/সাধারণ এলাকা বেছে নিয়ে নোট লিখুন।"));
+      return;
+    }
+    setBusy(true);
+    setLocalError("");
+    try {
+      await apiFetch(`/api/properties/${selectedProperty.id}/feedback-reports`, { method: "POST", body: JSON.stringify({ unitId: isLockedToUnit ? effectiveLockedUnitId : target === "__common__" ? null : target, note: note.trim() }) });
+      setNote("");
+      setShowReports(true);
+      onMessage(text("Report sent. No reading, bill, or collection was changed.", "রিপোর্ট পাঠানো হয়েছে। কোনো রিডিং, বিল বা পাওয়ার রিপোর্ট বদলায়নি।"));
+      await loadReports();
+    } catch (caught) {
+      setLocalError(localizedError(caught, "The report was not sent. Your note is still here."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeReport(report: RoomMeterIssue, action: "acknowledge" | "resolve") {
+    const reason = action === "resolve" ? window.prompt(text("Enter the resolution reason:", "সমাধানের কারণ লিখুন:")) : null;
+    if (action === "resolve" && !reason?.trim()) return;
+    if (busy) return;
+    setBusy(true);
+    setLocalError("");
+    try {
+      await apiFetch(`/api/room-meter-issues/${report.id}/${action}`, { method: "POST", body: JSON.stringify({ expectedVersion: report.version, reason }) });
+      onMessage(text("Report status saved with an audit entry.", "অডিট রেকর্ডসহ রিপোর্টের অবস্থা সংরক্ষণ হয়েছে।"));
+      await loadReports();
+    } catch (caught) {
+      setLocalError(localizedError(caught, "This report changed since it was loaded. Refresh and try again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!canReport && !canReview) return null;
+  return <section className="mt-6 rounded-[2rem] border border-sun/40 bg-white/75 p-5 shadow-soft sm:p-7">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{text("Feedback & Reports", "ফিডব্যাক ও রিপোর্ট")}</p><h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-ink">{text("Feedback / Report", "ফিডব্যাক / রিপোর্ট")}</h2><p className="mt-2 text-sm leading-6 text-ink/55">{text("Send a note about an authorized unit or Building/Common Area. Classification is left to the reviewer.", "অনুমোদিত ইউনিট বা বিল্ডিং/সাধারণ এলাকা সম্পর্কে নোট পাঠান। শ্রেণিবিন্যাস পর্যালোচক করবেন।")}</p></div><button type="button" onClick={() => { setOpen((value) => !value); if (!open) void loadReports(); }} className="min-h-11 rounded-xl border-2 border-sun/60 bg-sun/15 px-4 py-3 text-sm font-bold text-ink">{text("Feedback / Report", "ফিডব্যাক / রিপোর্ট")}</button></div>
+    {localError && <p role="alert" className="mt-3 rounded-lg bg-rose-100 px-3 py-2 text-sm font-semibold text-rose-800">{localError}</p>}
+    {open && canReport && <form onSubmit={submit} className="mt-4 grid gap-3 rounded-2xl border border-sun/40 bg-sun/10 p-4">
+      {availableProperties.length > 1 && !property ? <label className="text-sm font-bold text-ink">{text("Property", "সম্পত্তি")}<select value={propertyId} onChange={(event) => setPropertyId(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal">{availableProperties.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label> : <p className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-ink">{text("Property", "সম্পত্তি")}: {selectedProperty?.name ?? text("No authorized property", "কোনো অনুমোদিত সম্পত্তি নেই")}</p>}
+       {isLockedToUnit ? <p className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-ink">{text("Unit", "ইউনিট")}: {selectedUnit?.name ?? text("Unit unavailable", "ইউনিটের তথ্য নেই")} <span className="font-normal text-ink/50">· {text("selected from this room", "এই রুম থেকে নির্বাচিত")}</span></p> : <label className="text-sm font-bold text-ink">{text("Location", "স্থান")}<select value={target} onChange={(event) => setTarget(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal"><option value="">{text("Choose a unit or Building/Common Area", "ইউনিট বা বিল্ডিং/সাধারণ এলাকা বেছে নিন")}</option><option value="__common__">{text("Building/Common Area", "বিল্ডিং/সাধারণ এলাকা")}</option>{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} · {unit.floorName}</option>)}</select></label>}
+      <label className="text-sm font-bold text-ink">{text("Feedback or complaint note", "ফিডব্যাক বা অভিযোগের নোট")}<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={4} maxLength={2000} className="mt-1 block w-full rounded-lg border border-ink/10 bg-white px-3 py-3 text-base font-normal" placeholder={text("Write what you want the reviewer to know", "পর্যালোচককে যা জানাতে চান লিখুন")} required /></label>
+      <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy || !selectedProperty} className="min-h-12 rounded-xl bg-pine px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? text("Sending…", "পাঠানো হচ্ছে…") : text("Send Report", "রিপোর্ট পাঠান")}</button>{onClose && <button type="button" onClick={() => { setOpen(false); onClose(); }} className="min-h-12 rounded-xl border border-ink/15 px-4 py-3 text-sm font-bold text-ink">{text("Cancel", "বাতিল")}</button>}</div>
+    </form>}
+    {open && !canReport && <p className="mt-4 rounded-xl border border-dashed border-ink/15 p-4 text-sm text-ink/60">{text("You can view reports but cannot send a new one.", "আপনি রিপোর্ট দেখতে পারবেন, কিন্তু নতুন রিপোর্ট পাঠাতে পারবেন না।")}</p>}
+    {open && canReport && showReports && <button type="button" onClick={() => void loadReports()} className="mt-4 min-h-11 rounded-xl border border-pine/20 bg-mint/30 px-4 py-2.5 text-sm font-bold text-pine">{text("View My Reports", "আমার রিপোর্ট দেখুন")}</button>}
+    {open && showReports && <div className="mt-4 space-y-3"><h3 className="text-lg font-black text-ink">{text("Feedback & Reports", "ফিডব্যাক ও রিপোর্ট")}</h3>{reports.length === 0 ? <p className="rounded-xl border border-dashed border-ink/15 p-4 text-sm text-ink/55">{text("No reports to show.", "দেখানোর মতো কোনো রিপোর্ট নেই।")}</p> : reports.map((report) => <article key={report.id} className="rounded-xl border border-ink/10 bg-white p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-base font-black text-ink">{report.isFeedback ? text("Feedback / Report", "ফিডব্যাক / রিপোর্ট") : issueTypeLabel(report.issueType, text)} · {report.unitName}</p><p className="mt-1 text-sm text-ink/70">{report.description}</p><p className="mt-1 text-xs text-ink/55">{report.isFeedback ? text("Submitted", "পাঠানো হয়েছে") : text("Observed", "দেখা হয়েছে")} {report.isFeedback ? formatPropertyDateFromUtc(report.createdAtUtc, selectedProperty?.timeZoneId) : report.observedDate ?? text("Date unavailable", "তারিখ পাওয়া যায়নি")} · {text("reported by", "রিপোর্ট করেছেন")} {report.reporterName}</p></div><span className="rounded-full bg-sand px-2.5 py-1 text-xs font-bold text-ink">{report.status}</span></div>{canReview && report.status === "Open" && <div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={() => void changeReport(report, "acknowledge")} className="min-h-10 rounded-lg border border-pine/20 px-3 py-2 text-xs font-bold text-pine">{text("Acknowledge", "গ্রহণ নিশ্চিত করুন")}</button><button type="button" disabled={busy} onClick={() => void changeReport(report, "resolve")} className="min-h-10 rounded-lg bg-pine px-3 py-2 text-xs font-bold text-white">{text("Resolve", "সমাধান হয়েছে")}</button></div>}{canReview && report.status === "Acknowledged" && <button type="button" disabled={busy} onClick={() => void changeReport(report, "resolve")} className="mt-3 min-h-10 rounded-lg bg-pine px-3 py-2 text-xs font-bold text-white">{text("Resolve", "সমাধান হয়েছে")}</button>}</article>)}</div>}
+  </section>;
+}
+
+const FeedbackReportWorkspace = RoomMeterIssueReporter;
 
 function MeterOverviewWorkspace({ property, month: billingMonth, permissions, onError, initialRequest }: { property: Property; month?: string; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; initialRequest?: { propertyId: string; filter: string } | null }) {
   const { text, error: localizedError } = useLanguage();
@@ -1183,7 +1362,7 @@ function MeterOverviewWorkspace({ property, month: billingMonth, permissions, on
       {loading ? <p className="mt-4 text-sm text-ink/55">{text("Loading overview…", "overview লোড হচ্ছে…")}</p> : loadError ? <div role="alert" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-800"><span>{loadError}</span><button type="button" onClick={() => void load()} className="min-h-11 rounded-lg border border-rose-300 bg-white px-3 py-2 font-bold">{text("Retry", "আবার চেষ্টা করুন")}</button></div> : overview && <><p className="mt-3 text-xs text-ink/55">{text(`${units.length} of ${overview.units.length} accessible units shown`, `${overview.units.length}টি অনুমোদিত ইউনিটের মধ্যে ${units.length}টি দেখানো হচ্ছে`)}. {text("Draft and review statuses are not approval.", "খসড়া ও পর্যালোচনার অবস্থা অনুমোদন নয়।")}</p><div className="mt-3 hidden overflow-x-auto rounded-xl border border-ink/10 bg-white md:block"><table className="min-w-[980px] w-full text-left text-xs"><thead className="border-b border-ink/10 bg-sand/60"><tr>{["Unit", "Electricity", "Previous", "Current", "Date", "Used", "Amount", "Status", "Issue", "Open"].map((label) => <th key={label} className="p-3">{text(label, label)}</th>)}</tr></thead><tbody>{units.map((unit) => <tr key={unit.unitId} className="border-b border-ink/5 last:border-0"><td className="p-3"><p className="font-bold text-ink">{unit.unitName}</p><p className="text-ink/45">{unit.floorName}</p></td><td className="p-3">{unit.electricityApplicable ? text("Applicable", "প্রযোজ্য") : text("Not applicable", "প্রযোজ্য নয়")}</td><td className="p-3">{unit.previousReading ?? "—"}</td><td className="p-3">{unit.currentReading ?? "—"}</td><td className="p-3">{unit.currentReadingDate ?? text("Reading date unavailable", "রিডিংয়ের তারিখ পাওয়া যায়নি")}</td><td className="p-3">{unit.consumptionUnits ?? "—"}</td><td className="p-3">{unit.electricityAmount === null ? "—" : `Tk ${money(unit.electricityAmount)}`}</td><td className="p-3 font-semibold">{meterStatusLabel(unit.readingStatus, text)}</td><td className="p-3">{unit.reportedIssueCount > 0 ? text(`${unit.openIssueCount} open`, `${unit.openIssueCount}টি খোলা`) : "—"}</td><td className="p-3"><button type="button" onClick={() => openRoom(unit.unitId)} className="min-h-10 rounded-lg border border-pine/20 px-3 py-2 font-bold text-pine">{text("Open room", "রুম খুলুন")}</button></td></tr>)}</tbody></table></div><div className="mt-3 grid gap-2 md:hidden">{units.map((unit) => <article key={unit.unitId} className="rounded-xl border border-ink/10 bg-white p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-base font-black text-ink">{unit.unitName}</p><p className="text-xs text-ink/50">{unit.floorName} · {unit.electricityApplicable ? text("Electricity applicable", "বিদ্যুৎ প্রযোজ্য") : text("Not applicable", "প্রযোজ্য নয়")}</p></div><button type="button" onClick={() => openRoom(unit.unitId)} className="min-h-10 rounded-lg border border-pine/20 px-3 py-2 text-xs font-bold text-pine">{text("Open room", "রুম খুলুন")}</button></div><p className="mt-2 text-xs text-ink/60">{text("Previous", "আগের")}: {unit.previousReading ?? "—"} · {text("Current", "বর্তমান")}: {unit.currentReading ?? "—"} · {text("Used", "ব্যবহার")}: {unit.consumptionUnits ?? "—"}</p><p className="mt-1 text-xs font-semibold text-ink">{meterStatusLabel(unit.readingStatus, text)} · {unit.reportedIssueCount > 0 ? text("Issue reported", "সমস্যা রিপোর্ট হয়েছে") : text("No issue reported", "কোনো সমস্যা রিপোর্ট হয়নি")}</p></article>)}</div></>}</>}
   </section>;
 }
-function BillingPanel(props: { property: Property; month?: string; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; meterOnly?: boolean; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void }) {
+function BillingPanel(props: { property: Property; month?: string; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; meterOnly?: boolean; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void; onCurrentUnitChange?: (unitId: string | null) => void }) {
   return <div data-guided-meter-entry={props.meterOnly ? "true" : undefined}>
     {props.meterOnly ? <><RoomMeterEntry {...props} /><CycleSubmissionPanel property={props.property} month={props.month ?? currentMonthInput(props.property.timeZoneId)} role={props.role} permissions={props.permissions} onError={props.onError} onMessage={props.onMessage} /></> : <LegacyBillingPanel {...props} />}
   </div>;
@@ -1222,7 +1401,7 @@ function legacyNormalizeNumericInput(value: string) {
   return value.replace(/[০-৯]/g, (digit) => String("০১২৩৪৫৬৭৮৯".indexOf(digit)));
 }
 
-function RoomMeterEntry({ property, month: initialMonth, role, permissions, onError, onMessage, unitSearchQuery = "", onUnitSearchChange }: { property: Property; month?: string; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void }) {
+function RoomMeterEntry({ property, month: initialMonth, role, permissions, onError, onMessage, unitSearchQuery = "", onUnitSearchChange, onCurrentUnitChange }: { property: Property; month?: string; role: UserRole; permissions?: Partial<Record<PermissionKey, boolean>>; onError: (message: string) => void; onMessage: (message: string) => void; unitSearchQuery?: string; onUnitSearchChange?: (value: string) => void; onCurrentUnitChange?: (unitId: string | null) => void }) {
   const { text, error: localizedError } = useLanguage();
   const [month, setMonth] = useState(initialMonth ?? currentMonthInput(property.timeZoneId));
   const [floorId, setFloorId] = useState("all");
@@ -1252,6 +1431,10 @@ function RoomMeterEntry({ property, month: initialMonth, role, permissions, onEr
   const currentBill = filteredBills[roomIndex] ?? filteredBills[0];
   const currentElectricity = currentBill?.charges.find((charge) => charge.isMetered);
   const completedCount = meterBills.filter((bill) => bill.charges.some((charge) => charge.isMetered && charge.currentReading !== null)).length;
+  useEffect(() => {
+    onCurrentUnitChange?.(currentBill?.unitId ?? null);
+    if (currentBill) window.dispatchEvent(new CustomEvent("primetect:current-meter-unit", { detail: { unitId: currentBill.unitId } }));
+  }, [currentBill?.unitId, onCurrentUnitChange]);
 
   function setDirty(value: boolean) { dirtyRef.current = value; setDirtyState(value); }
   function setRoomIndex(next: number | ((current: number) => number)) {
@@ -1625,10 +1808,14 @@ function currentDateParts(timeZoneId = "Asia/Dhaka") {
 }
 function currentMonthInput(timeZoneId?: string) { const date = currentDateParts(timeZoneId); return `${date.year}-${date.month}`; }
 function currentDateInput(timeZoneId?: string) { const date = currentDateParts(timeZoneId); return `${date.year}-${date.month}-${date.day}`; }
+function formatPropertyDateFromUtc(value: string, timeZoneId?: string) {
+  try { return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: timeZoneId || "Asia/Dhaka" }).format(new Date(value)); }
+  catch { return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(value)); }
+}
 function formatDate(value: string) { return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(new Date(`${value}T00:00:00`)); }
 function money(value: number) { return value.toFixed(2); }
 function issueTypeLabel(value: RoomMeterIssue["issueType"], text: (english: string, bangla: string) => string) {
-  return value === "DamagedMeter" ? text("Damaged meter", "মিটার নষ্ট") : value === "UnreadableMeter" ? text("Unreadable meter", "মিটার পড়া যাচ্ছে না") : value === "RoomMaintenance" ? text("Room maintenance", "রুম রক্ষণাবেক্ষণ") : text("Other", "অন্যান্য");
+  return value === null ? text("Unclassified feedback", "শ্রেণিবিহীন ফিডব্যাক") : value === "DamagedMeter" ? text("Damaged meter", "মিটার নষ্ট") : value === "UnreadableMeter" ? text("Unreadable meter", "মিটার পড়া যাচ্ছে না") : value === "RoomMaintenance" ? text("Room maintenance", "রুম রক্ষণাবেক্ষণ") : text("Other", "অন্যান্য");
 }
 function meterStatusLabel(value: MeterRoomOverview["readingStatus"], text: (english: string, bangla: string) => string) {
   const labels: Record<MeterRoomOverview["readingStatus"], [string, string]> = { NotApplicable: ["Not applicable", "প্রযোজ্য নয়"], NoDraft: ["No draft", "খসড়া নেই"], Missing: ["Missing reading", "রিডিং অনুপস্থিত"], SavedDraft: ["Saved draft", "খসড়া সেভ হয়েছে"], AwaitingReview: ["Awaiting review", "পর্যালোচনার অপেক্ষায়"], Returned: ["Returned for correction", "সংশোধনের জন্য ফেরত"], Approved: ["Approved", "অনুমোদিত"] };

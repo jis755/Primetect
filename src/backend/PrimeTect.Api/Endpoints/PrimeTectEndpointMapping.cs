@@ -65,8 +65,11 @@ public static class PrimeTectEndpointMapping
         secure.MapGet("/properties/{propertyId:guid}/meter-overview/{billingMonth}", (Delegate)GetMeterOverviewAsync);
         secure.MapGet("/properties/{propertyId:guid}/room-meter-issues", (Delegate)GetRoomMeterIssuesAsync);
         secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/room-meter-issues", (Delegate)CreateRoomMeterIssueAsync);
+        secure.MapPost("/properties/{propertyId:guid}/feedback-reports", (Delegate)CreateFeedbackReportAsync);
         secure.MapPost("/room-meter-issues/{issueId:guid}/acknowledge", (Delegate)AcknowledgeRoomMeterIssueAsync);
         secure.MapPost("/room-meter-issues/{issueId:guid}/resolve", (Delegate)ResolveRoomMeterIssueAsync);
+        secure.MapGet("/notifications", (Delegate)GetNotificationsAsync);
+        secure.MapPost("/notifications/{notificationId:guid}/read", (Delegate)MarkNotificationReadAsync);
         secure.MapGet("/properties/{propertyId:guid}/collection-reports/{billingMonth}", (Delegate)GetCollectionReportsAsync);
         secure.MapGet("/properties/{propertyId:guid}/collection-overview/{billingMonth}", (Delegate)GetCollectionOverviewAsync);
         secure.MapPost("/properties/{propertyId:guid}/collection-reports", (Delegate)CreateCollectionReportAsync);
@@ -2181,8 +2184,8 @@ public static class PrimeTectEndpointMapping
         try
         {
             issueCounts = (await db.RoomMeterIssues.AsNoTracking()
-                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
-                .GroupBy(item => item.UnitId)
+                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.UnitId.HasValue)
+                .GroupBy(item => item.UnitId!.Value)
                 .Select(group => new RoomMeterIssueCount(group.Key, group.Count(), group.Count(item => item.Status != RoomMeterIssueStatus.Resolved)))
                 .ToListAsync(cancellationToken))
                 .ToDictionary(item => item.UnitId);
@@ -2336,7 +2339,8 @@ public static class PrimeTectEndpointMapping
 
         var canView = await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewMeterReadings, cancellationToken);
         var canReview = actor.IsAdmin || await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewRoomMeterIssues, cancellationToken);
-        if (!canView && !canReview)
+        var canReport = await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReportRoomMeterIssues, cancellationToken);
+        if (!canView && !canReview && !canReport)
         {
             return Results.Forbid();
         }
@@ -2349,7 +2353,7 @@ public static class PrimeTectEndpointMapping
         try
         {
             var issues = await db.RoomMeterIssues.AsNoTracking()
-                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && (canReview || item.ReporterUserId == actor.UserId))
+                .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && (canReview || canView && item.ReporterUserId == actor.UserId || canReport && item.ReporterUserId == actor.UserId))
                 .OrderByDescending(item => item.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
             var responses = new List<RoomMeterIssueResponse>(issues.Count);
@@ -2438,6 +2442,218 @@ public static class PrimeTectEndpointMapping
             await transaction.RollbackAsync(cancellationToken);
             return Results.Problem(detail: "The issue report could not be saved. No meter or billing data was changed.", statusCode: StatusCodes.Status500InternalServerError);
         }
+    }
+
+    private static async Task<IResult> CreateFeedbackReportAsync(
+        Guid propertyId,
+        FeedbackReportCreateRequest request,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReportRoomMeterIssues, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false)
+            .FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        if (property is null)
+        {
+            return Results.NotFound();
+        }
+
+        Unit? unit = null;
+        if (request.UnitId.HasValue)
+        {
+            unit = await AccessibleUnitAsync(db, actor, propertyId, request.UnitId.Value, cancellationToken);
+            if (unit is null)
+            {
+                return Results.NotFound();
+            }
+        }
+
+        RoomMeterIssue issue;
+        try
+        {
+            issue = RoomMeterIssue.CreateFeedback(actor.OrganizationId, propertyId, unit?.Id, actor.UserId, request.Note);
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.RoomMeterIssues.Add(issue);
+            db.RoomMeterIssueAuditEntries.Add(new RoomMeterIssueAuditEntry(
+                actor.OrganizationId,
+                issue.Id,
+                actor.UserId,
+                RoomMeterIssueAuditAction.Reported,
+                null,
+                null,
+                JsonSerializer.Serialize(RoomMeterIssueSnapshot(issue))));
+
+            await AddFeedbackNotificationsAsync(db, actor, propertyId, issue, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Created($"/api/room-meter-issues/{issue.Id}", await ToRoomMeterIssueResponseAsync(db, issue, cancellationToken));
+        }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return RoomMeterIssueStorageUnavailable();
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The feedback report could not be saved. No billing data was changed.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static async Task AddFeedbackNotificationsAsync(
+        PropertyManagementDbContext db,
+        RequestUser actor,
+        Guid propertyId,
+        RoomMeterIssue issue,
+        CancellationToken cancellationToken)
+    {
+        var users = await db.Users.AsNoTracking()
+            .Where(user => user.OrganizationId == actor.OrganizationId && user.IsActive && user.Id != actor.UserId)
+            .ToListAsync(cancellationToken);
+
+        foreach (var user in users)
+        {
+            var recipient = new RequestUser(user.Id, user.OrganizationId, user.Role);
+            if (!recipient.IsAdmin
+                && !await OrganizationPermissionAuthorization.HasAsync(db, recipient, OrganizationPermission.ReviewRoomMeterIssues, cancellationToken))
+            {
+                continue;
+            }
+
+            if (!await AccessibleProperties(db, recipient, includeArchived: false)
+                .AnyAsync(property => property.Id == propertyId, cancellationToken))
+            {
+                continue;
+            }
+
+            db.UserNotifications.Add(new UserNotification(actor.OrganizationId, user.Id, propertyId, issue.Id));
+        }
+    }
+
+    private static async Task<IResult> GetNotificationsAsync(
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.IsAdmin && !await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewRoomMeterIssues, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        try
+        {
+            var notifications = await db.UserNotifications.AsNoTracking()
+                .Where(notification => notification.OrganizationId == actor.OrganizationId && notification.RecipientUserId == actor.UserId)
+                .OrderByDescending(notification => notification.CreatedAtUtc)
+                .Take(50)
+                .ToListAsync(cancellationToken);
+            var responses = new List<NotificationResponse>(notifications.Count);
+
+            foreach (var notification in notifications)
+            {
+                var property = await AccessibleProperties(db, actor, includeArchived: false)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(item => item.Id == notification.PropertyId, cancellationToken);
+                if (property is null)
+                {
+                    continue;
+                }
+
+                var issue = await db.RoomMeterIssues.AsNoTracking()
+                    .FirstOrDefaultAsync(item => item.Id == notification.RoomMeterIssueId && item.OrganizationId == actor.OrganizationId && item.PropertyId == property.Id, cancellationToken);
+                if (issue is null)
+                {
+                    continue;
+                }
+
+                var unit = issue.UnitId.HasValue
+                    ? await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == issue.UnitId.Value && item.PropertyId == property.Id, cancellationToken)
+                    : null;
+                var unitLabel = unit?.Name ?? "Building/Common Area";
+                responses.Add(new NotificationResponse(
+                    notification.Id,
+                    notification.RoomMeterIssueId,
+                    notification.PropertyId,
+                    issue.UnitId,
+                    $"New report · {(unit is null ? "Building/Common Area" : $"Room {unit.Name}")}",
+                    property.Name,
+                    unitLabel,
+                    property.TimeZoneId,
+                    notification.CreatedAtUtc,
+                    notification.ReadAtUtc,
+                    notification.ReadAtUtc.HasValue));
+            }
+
+            return Results.Ok(responses);
+        }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            return RoomMeterIssueStorageUnavailable();
+        }
+    }
+
+    private static async Task<IResult> MarkNotificationReadAsync(
+        Guid notificationId,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!actor.IsAdmin && !await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ReviewRoomMeterIssues, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        UserNotification? notification;
+        try
+        {
+            notification = await db.UserNotifications.FirstOrDefaultAsync(item =>
+                item.Id == notificationId && item.OrganizationId == actor.OrganizationId && item.RecipientUserId == actor.UserId, cancellationToken);
+        }
+        catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+        {
+            return RoomMeterIssueStorageUnavailable();
+        }
+
+        if (notification is null
+            || await AccessibleProperties(db, actor, includeArchived: false).AllAsync(item => item.Id != notification.PropertyId, cancellationToken))
+        {
+            return Results.NotFound();
+        }
+
+        notification.MarkRead();
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.NoContent();
     }
 
     private static Task<IResult> AcknowledgeRoomMeterIssueAsync(
@@ -3367,7 +3583,9 @@ public static class PrimeTectEndpointMapping
         RoomMeterIssue issue,
         CancellationToken cancellationToken)
     {
-        var unit = await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == issue.UnitId, cancellationToken);
+        var unit = issue.UnitId.HasValue
+            ? await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == issue.UnitId.Value, cancellationToken)
+            : null;
         var floorName = unit is null
             ? null
             : await db.Floors.AsNoTracking().Where(item => item.Id == unit.FloorId).Select(item => item.Name).FirstOrDefaultAsync(cancellationToken);
@@ -3384,7 +3602,7 @@ public static class PrimeTectEndpointMapping
             issue.Id,
             issue.PropertyId,
             issue.UnitId,
-            unit?.Name ?? "Unknown unit",
+            unit?.Name ?? "Building/Common Area",
             floorName,
             issue.ReporterUserId,
             reporterName,
@@ -3395,7 +3613,9 @@ public static class PrimeTectEndpointMapping
             issue.Status,
             issue.Version,
             issue.ResolutionReason,
-            audit);
+            audit,
+            issue.Target,
+            issue.IssueType is null);
     }
 
     private static object RoomMeterIssueSnapshot(RoomMeterIssue issue) => new
@@ -3403,6 +3623,7 @@ public static class PrimeTectEndpointMapping
         issue.Id,
         issue.PropertyId,
         issue.UnitId,
+        issue.Target,
         issue.ReporterUserId,
         issue.IssueType,
         issue.Description,
@@ -3841,7 +4062,8 @@ public static class PrimeTectEndpointMapping
         exception switch
         {
             DbException databaseException when databaseException.Message.Contains("room_meter_issues", StringComparison.OrdinalIgnoreCase)
-                || databaseException.Message.Contains("room_meter_issue_audit_entries", StringComparison.OrdinalIgnoreCase) => true,
+                || databaseException.Message.Contains("room_meter_issue_audit_entries", StringComparison.OrdinalIgnoreCase)
+                || databaseException.Message.Contains("user_notifications", StringComparison.OrdinalIgnoreCase) => true,
             _ when exception.InnerException is not null => IsMissingRoomMeterIssueStorage(exception.InnerException),
             _ => false,
         };

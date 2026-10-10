@@ -256,6 +256,70 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
         Assert.Equal(HttpStatusCode.NotFound, (await otherOrganization.GetAsync($"/api/properties/{property.Id}/collection-reports/2026-01")).StatusCode);
     }
 
+    [Fact]
+    public async Task Feedback_reports_use_stable_targets_server_time_notifications_and_reviewer_visibility()
+    {
+        using var admin = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        await RegisterAsync(admin, $"feedback-admin-{suffix}@example.test", "Feedback Admin", $"Feedback Organization {suffix}");
+
+        var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Feedback Property {suffix}",
+            address = "10 Feedback Street",
+            propertyType = "ApartmentBuilding",
+            floors = new[] { new { name = "Ground", unitCount = 1, unitNames = new[] { "F-1" } } },
+        }));
+        var unit = property.Floors.Single().Units.Single();
+        using var reporter = factory.CreateClient();
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"feedback-staff-{suffix}@example.test", role = "BuildingStaff" }));
+        var reporterUser = await AcceptInvitationAsync(reporter, invitation.InvitationToken, "Feedback Reporter");
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{reporterUser.Id}", null)).StatusCode);
+
+        var unitReport = await ReadAsync<FeedbackResponse>(await reporter.PostAsJsonAsync($"/api/properties/{property.Id}/feedback-reports", new
+        {
+            unitId = unit.Id,
+            note = "The light near the room needs attention.",
+        }));
+        Assert.Equal(unit.Id, unitReport.UnitId);
+        Assert.Equal(RoomMeterIssueTarget.Unit, unitReport.Target);
+        Assert.Null(unitReport.IssueType);
+        Assert.Null(unitReport.ObservedDate);
+        Assert.Equal(RoomMeterIssueStatus.Open, unitReport.Status);
+        Assert.Single(unitReport.Audit);
+        Assert.Equal(RoomMeterIssueAuditAction.Reported, unitReport.Audit[0].Action);
+
+        var commonAreaReport = await ReadAsync<FeedbackResponse>(await reporter.PostAsJsonAsync($"/api/properties/{property.Id}/feedback-reports", new
+        {
+            unitId = (Guid?)null,
+            note = "The entrance needs cleaning.",
+        }));
+        Assert.Null(commonAreaReport.UnitId);
+        Assert.Equal(RoomMeterIssueTarget.BuildingCommonArea, commonAreaReport.Target);
+
+        var reporterReports = await ReadAsync<List<FeedbackResponse>>(await reporter.GetAsync($"/api/properties/{property.Id}/room-meter-issues"));
+        Assert.Equal(2, reporterReports.Count);
+        Assert.All(reporterReports, report => Assert.Equal(RoomMeterIssueStatus.Open, report.Status));
+
+        var notifications = await ReadAsync<List<NotificationResponse>>(await admin.GetAsync("/api/notifications"));
+        var unitNotification = Assert.Single(notifications, notification => notification.RoomMeterIssueId == unitReport.Id);
+        Assert.Equal($"New report · Room F-1", unitNotification.Title);
+        Assert.False(unitNotification.IsRead);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/notifications/{unitNotification.Id}/read", null)).StatusCode);
+        var notificationsAfterRead = await ReadAsync<List<NotificationResponse>>(await admin.GetAsync("/api/notifications"));
+        Assert.True(Assert.Single(notificationsAfterRead, notification => notification.Id == unitNotification.Id).IsRead);
+
+        var adminReports = await ReadAsync<List<FeedbackResponse>>(await admin.GetAsync($"/api/properties/{property.Id}/room-meter-issues"));
+        Assert.Equal(2, adminReports.Count);
+        Assert.All(adminReports, report => Assert.Equal(RoomMeterIssueStatus.Open, report.Status));
+
+        using var otherOrganization = factory.CreateClient();
+        await RegisterAsync(otherOrganization, $"other-feedback-{suffix}@example.test", "Other Feedback Admin", $"Other Feedback Organization {suffix}");
+        Assert.Equal(HttpStatusCode.NotFound, (await otherOrganization.PostAsJsonAsync($"/api/properties/{property.Id}/feedback-reports", new { unitId = unit.Id, note = "Cross-organization attempt" })).StatusCode);
+        var otherNotifications = await ReadAsync<List<NotificationResponse>>(await otherOrganization.GetAsync("/api/notifications"));
+        Assert.Empty(otherNotifications);
+    }
+
     private async Task<CollectionReportResponse> CreateReportAsync(HttpClient client, Guid propertyId, Guid billId, decimal amount)
     {
         return await ReadAsync<CollectionReportResponse>(await client.PostAsJsonAsync($"/api/properties/{propertyId}/collection-reports", new
@@ -322,4 +386,6 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
     private sealed record CollectionUnitOverviewResponse(Guid UnitId, string UnitName, string? FloorName, Guid? BillingUnitBillId, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, decimal? BilledAmount, decimal ConfirmedCollectedAmount, decimal PendingReportedAmount, decimal PendingReversalAmount, decimal? RemainingBalance, string Status);
     private sealed record RoomMeterIssueResponse(Guid Id, Guid PropertyId, Guid UnitId, string UnitName, string? FloorName, Guid ReporterUserId, string ReporterName, RoomMeterIssueType IssueType, string Description, DateOnly ObservedDate, DateTimeOffset CreatedAtUtc, RoomMeterIssueStatus Status, long Version, string? ResolutionReason, List<RoomMeterIssueAuditResponse> Audit);
     private sealed record RoomMeterIssueAuditResponse(Guid Id, Guid ActorUserId, RoomMeterIssueAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
+    private sealed record FeedbackResponse(Guid Id, Guid PropertyId, Guid? UnitId, string UnitName, string? FloorName, Guid ReporterUserId, string ReporterName, RoomMeterIssueType? IssueType, string Description, DateOnly? ObservedDate, DateTimeOffset CreatedAtUtc, RoomMeterIssueStatus Status, long Version, string? ResolutionReason, List<RoomMeterIssueAuditResponse> Audit, RoomMeterIssueTarget Target, bool IsFeedback);
+    private sealed record NotificationResponse(Guid Id, Guid RoomMeterIssueId, Guid PropertyId, Guid? UnitId, string Title, string PropertyName, string UnitLabel, string TimeZoneId, DateTimeOffset CreatedAtUtc, DateTimeOffset? ReadAtUtc, bool IsRead);
 }

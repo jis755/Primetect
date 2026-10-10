@@ -878,7 +878,6 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(2000)");
 
                     b.Property<string>("IssueType")
-                        .IsRequired()
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
 
@@ -888,7 +887,7 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("LastChangedByUserId")
                         .HasColumnType("uuid");
 
-                    b.Property<DateOnly>("ObservedDate")
+                    b.Property<DateOnly?>("ObservedDate")
                         .HasColumnType("date");
 
                     b.Property<Guid>("OrganizationId")
@@ -909,7 +908,12 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
-                    b.Property<Guid>("UnitId")
+                    b.Property<string>("Target")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<Guid?>("UnitId")
                         .HasColumnType("uuid");
 
                     b.Property<long>("Version")
@@ -1110,6 +1114,44 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasIndex("OrganizationId", "Email");
 
                     b.ToTable("user_invitations", (string)null);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.UserNotification", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ReadAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("RecipientUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RoomMeterIssueId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("RoomMeterIssueId");
+
+                    b.HasIndex("OrganizationId", "RecipientUserId", "CreatedAtUtc");
+
+                    b.HasIndex("OrganizationId", "RecipientUserId", "RoomMeterIssueId")
+                        .IsUnique();
+
+                    b.ToTable("user_notifications", (string)null);
                 });
 
             modelBuilder.Entity("PrimeTect.Infrastructure.Identity.AppUser", b =>
@@ -1406,8 +1448,7 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasOne("PrimeTect.Domain.Entities.Unit", null)
                         .WithMany()
                         .HasForeignKey("UnitId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("PrimeTect.Domain.Entities.RoomMeterIssueAuditEntry", b =>
@@ -1439,6 +1480,21 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasOne("PrimeTect.Domain.Entities.Property", null)
                         .WithMany()
                         .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.UserNotification", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.Property", null)
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PrimeTect.Domain.Entities.RoomMeterIssue", null)
+                        .WithMany()
+                        .HasForeignKey("RoomMeterIssueId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

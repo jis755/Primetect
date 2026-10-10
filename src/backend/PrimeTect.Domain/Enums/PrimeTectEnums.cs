@@ -123,6 +123,12 @@ public enum RoomMeterIssueType
     Other = 4,
 }
 
+public enum RoomMeterIssueTarget
+{
+    Unit = 1,
+    BuildingCommonArea = 2,
+}
+
 public enum RoomMeterIssueStatus
 {
     Open = 1,

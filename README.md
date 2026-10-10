@@ -9,11 +9,12 @@ This repository is intentionally standalone. It includes a branded Next.js front
 The current local GuidedDemo API was inspected at `http://127.0.0.1:5000`.
 Its database is the existing isolated GuidedDemo database, not `primetect`;
 its migration history currently ends at `20261009221340_PropertyTimeZone`.
-The `20261010091817_RoomMeterIssues` migration is present in source but is
-not applied to that existing database. The API now reports a clear
+The `20261010091817_RoomMeterIssues` and
+`20261010184036_FeedbackReportsAndNotifications` migrations are present in
+source but are not applied to that existing database. The API now reports a clear
 `503 Service Unavailable` for issue-backed room-overview/reporting requests
 when that storage is absent; it does not apply the migration automatically.
-Apply that migration only to a newly created disposable/demo database before
+Apply those migrations only to a newly created disposable/demo database before
 using room/meter issue workflows. Do not point local setup at `primetect`.
 
 Collection approval remains independent and server-enforced. A person who
@@ -162,7 +163,7 @@ Manual review checklist:
 The current checkpoint also has a new isolated synthetic demo database:
 `primetect_demo_guided_20261010_da3c89c`. It is separate from both `primetect` and the earlier collection demo. The
 currently running copy has the first seven migrations applied; `RoomMeterIssues` remains unapplied there. Use a new
-disposable database for the complete eight-migration issue workflow. It contains unequal Ground/Upper floors,
+disposable database for the complete nine-migration issue/feedback workflow. It contains unequal Ground/Upper floors,
 mixed fixed and metered charges, inherited/custom/disabled examples, a named tenant occupying multiple units, an
 unnamed occupancy, two consecutive approved billing months (September and October 2026), and one pending cash
 collection report.
@@ -360,7 +361,7 @@ Run these commands one at a time to limit memory use. The normal API workflow te
 
 ### Disposable PostgreSQL verification
 
-The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all eight committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
+The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all nine committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
 
 PowerShell example (use a local password only; do not put this value in a tracked file):
 
@@ -407,6 +408,22 @@ Collection entry uses the current reportable remaining balance: approved billed 
 
 Meter Readings has a separate **Report a room/meter issue / রুম বা মিটারের সমস্যা জানান** action. It stores the assigned property/unit, issue type, description, property-local observed date, reporter, server timestamp, status, and audit history without saving or changing a reading, bill, or collection. Staff can report assigned-unit issues; Admins or explicitly enabled reviewers can acknowledge or resolve them. Damaged-meter reports never fabricate readings or reset meters.
 
+**Feedback / Report** is the simplified reporting action. A unit-screen
+report carries the stable property and unit ID into a read-only context and
+asks only for a note. A home-screen report requires an authorized location:
+either a permitted unit or **Building/Common Area**; it never attaches a
+building-wide note to an arbitrary unit. The server supplies the submission
+timestamp, which is displayed in the property's timezone. There is no
+editable date or category in this flow, and the note remains in the form if
+the request fails. The list is titled **Feedback & Reports**; financial
+reporting remains **Billing Reports**. Existing categorized issue records
+retain their historical category and observation date.
+
+Only authorized recipients receive feedback notifications. A notification
+identifies the unit when applicable (for example, **New report · Room 6B**),
+and opening it marks it read without resolving the report. No email or SMS
+delivery is claimed.
+
 Meter and collection screens include a property/month **View all rooms** overview. Every accessible enabled unit appears once; fixed-charge-only units are marked Not applicable and are not counted as missing. Reading filters distinguish missing, saved draft, awaiting review, returned, approved, and reported issues. Collection rows distinguish no approved bill, pending reports, confirmed collections, pending reversals, and confirmed outstanding balances; historical occupancy references are not transferred.
 
 ### Meter reading month convention
@@ -415,7 +432,7 @@ The selected billing month is the month in which the bill is issued. Meter consu
 
 Electricity amount is rounded to two decimal places using the existing away-from-zero money rule. A low-bill warning is informational only and appears strictly below the effective threshold; the initial default is Tk200, so Tk199 warns while Tk200 does not. It never adds a minimum fee and does not block approval.
 
-The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, and `RoomMeterIssues` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
+The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, `RoomMeterIssues`, and `FeedbackReportsAndNotifications` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
 
 ### Simplified workspace navigation
 
@@ -464,7 +481,7 @@ npm.cmd run build
 Pop-Location
 ```
 
-For the existing local GuidedDemo API, verify that the API process is listening on `http://127.0.0.1:5000` and that its ignored `src/backend/PrimeTect.Api/appsettings.GuidedDemo.json` is the intended local configuration before starting a frontend. The current database is missing `RoomMeterIssues`, so issue-backed room overview/reporting remains migration-blocked until a fresh disposable/demo database is prepared. The frontend can use the API directly:
+For the existing local GuidedDemo API, verify that the API process is listening on `http://127.0.0.1:5000` and that its ignored `src/backend/PrimeTect.Api/appsettings.GuidedDemo.json` is the intended local configuration before starting a frontend. The current database is missing `RoomMeterIssues` and `FeedbackReportsAndNotifications`, so issue/feedback-backed room overview/reporting remains migration-blocked until a fresh disposable/demo database is prepared. The frontend can use the API directly:
 
 ```powershell
 Push-Location src/frontend
