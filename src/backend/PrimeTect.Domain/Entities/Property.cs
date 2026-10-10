@@ -8,7 +8,7 @@ public sealed class Property
     {
     }
 
-    public Property(Guid organizationId, string name, string address, PropertyType propertyType, string? timeZoneId = null)
+    public Property(Guid organizationId, string name, string address, PropertyType propertyType, string? timeZoneId = null, decimal? latitude = null, decimal? longitude = null)
     {
         Id = Guid.NewGuid();
         OrganizationId = organizationId;
@@ -16,6 +16,8 @@ public sealed class Property
         Address = string.IsNullOrWhiteSpace(address) ? throw new ArgumentException("Property address is required.", nameof(address)) : address.Trim();
         PropertyType = propertyType;
         TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? "Asia/Dhaka" : timeZoneId.Trim();
+        Latitude = latitude;
+        Longitude = longitude;
         CreatedAtUtc = DateTimeOffset.UtcNow;
     }
 
@@ -31,11 +33,15 @@ public sealed class Property
 
     public string TimeZoneId { get; private set; } = "Asia/Dhaka";
 
+    public decimal? Latitude { get; private set; }
+
+    public decimal? Longitude { get; private set; }
+
     public bool IsArchived { get; private set; }
 
     public DateTimeOffset CreatedAtUtc { get; private set; }
 
-    public void Update(string name, string address, PropertyType propertyType, string? timeZoneId = null)
+    public void Update(string name, string address, PropertyType propertyType, string? timeZoneId = null, decimal? latitude = null, decimal? longitude = null)
     {
         Name = string.IsNullOrWhiteSpace(name) ? throw new ArgumentException("Property name is required.", nameof(name)) : name.Trim();
         Address = string.IsNullOrWhiteSpace(address) ? throw new ArgumentException("Property address is required.", nameof(address)) : address.Trim();
@@ -44,6 +50,9 @@ public sealed class Property
         {
             TimeZoneId = timeZoneId.Trim();
         }
+
+        Latitude = latitude;
+        Longitude = longitude;
     }
 
     public void SetArchived(bool isArchived) => IsArchived = isArchived;

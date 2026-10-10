@@ -2,7 +2,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using PrimeTect.Application.Abstractions;
 using PrimeTect.Infrastructure.Persistence;
+using PrimeTect.Infrastructure.Storage;
 
 namespace PrimeTect.Infrastructure.DependencyInjection;
 
@@ -33,6 +35,10 @@ public static class InfrastructureServiceCollectionExtensions
                 .UseNpgsql(connectionString)
                 .AddInterceptors(serviceProvider.GetServices<ISaveChangesInterceptor>()));
         }
+
+        services.AddSingleton<IMeterPhotoStorage, LocalMeterPhotoStorage>();
+        services.AddSingleton<IMeterOcrProvider, UnavailableMeterOcrProvider>();
+        services.AddHostedService<MeterPhotoCleanupService>();
 
         return services;
     }

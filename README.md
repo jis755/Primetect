@@ -361,7 +361,7 @@ Run these commands one at a time to limit memory use. The normal API workflow te
 
 ### Disposable PostgreSQL verification
 
-The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all ten committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
+The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all eleven committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
 
 PowerShell example (use a local password only; do not put this value in a tracked file):
 
@@ -432,7 +432,7 @@ recipient-scoped notification workflows:
 - Database: `primetect_demo_feedback_20261011_9a72c4e1`
 - API: `http://127.0.0.1:5013`
 - Frontend: `http://127.0.0.1:3013`
-- Migrations: all ten current migrations, including
+- Migrations: all eleven current migrations, including
   `FeedbackReportsAndNotifications` and `FeedbackSubmissionIdempotency`, were
   applied from an empty database to this new database only.
 - Local configuration: `src/backend/PrimeTect.Api/appsettings.FeedbackDemo.Local.json`
@@ -586,3 +586,35 @@ The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical
 - The direct `postcss` package is already at `8.5.29`; the remaining PostCSS finding is the nested copy under Next.
 
 No `npm audit fix --force` or blind major upgrade was applied. The recommended follow-up is a planned Next 16/Tailwind 4 migration with a visual regression pass, or a targeted dependency update when compatible releases are confirmed.
+
+## Step 2: secure meter links, photos, and optional locations
+
+The Step 2 migration is `20261010220000_QrMeterPhotosAndLocations`. It adds nullable property coordinates, revocable opaque meter QR references, and private meter-photo metadata/associations. It must be applied only to a newly created disposable database during verification; the applied status of existing `primetect` and older demos remains **unknown**. Do not start an older demo against a schema that needs this migration.
+
+### Meter QR labels
+
+An authorized property administrator can open a unit card, choose **Meter QR label**, select **Room door** or **Electricity meter**, and generate a label. The response contains an opaque, unguessable navigation URL and an SVG that can be downloaded or printed. Rotation revokes earlier labels without deleting billing history. A QR is not authentication: the staff member must sign in, retain current organization/property and reading permissions, and choose the billing month. The billing month is deliberately not encoded in the label, so it cannot silently change the selected period. Invalid, revoked, disabled, or inaccessible links are rejected.
+
+Set `PublicAppBaseUrl` (or `Frontend:PublicBaseUrl`) to a phone-reachable `http`/`https` application origin before generating labels. `localhost` and `127.0.0.1` labels work only on the same device; they are not reachable from another phone. No tunnel or public deployment is opened by PrimeTect.
+
+QR labels use the existing one-electricity-meter-per-unit model. Multiple physical meters per unit are not represented in this milestone, and QR contents do not contain tenant details or credentials. SVG generation uses the QRCoder library's documented SVG QR path ([QRCoder official repository](https://github.com/Shane32/QRCoder)).
+
+### Meter photos and confirmation
+
+The guided room-entry screen has **Take meter photo** with camera capture where the browser provides it and ordinary file upload as the fallback. JPEG, PNG, and the verified WebP header variant are accepted up to 10 MB with safe generated storage keys and dimension limits. HEIC is rejected. A preview can be removed or retaken. The staff member must confirm the numeric reading separately; an OCR suggestion, when a provider exists, never writes a reading automatically. Saving still uses the existing meter-reading endpoint, concurrency version, negative-consumption checks, opening-reading rules, and draft/return/approval lifecycle.
+
+Development and tests use private local storage under `App_Data/meter-photos` or the configured `MeterPhotos:RootPath`; the directory is not served as static content. Staged uploads that are not attached are cleaned up after 24 hours by the hosted cleanup service. Database and file writes are not one transaction: a failed database save deletes the staged file and returns an unsaved error. Production needs a durable private storage implementation, backup/retention policy, and deployment-specific cleanup monitoring before this is suitable for durable operations.
+
+The current provider is `unavailable-local-provider`: no OCR engine is configured, no image is sent to a paid or external service, and no confidence score is manufactured. Manual entry remains fully usable. Deterministic OCR fixtures cover the provider boundary only; they do not establish real-meter accuracy. The current local validator preserves the accepted source bytes and validates their declared image header/dimensions; EXIF GPS removal and full camera-orientation normalization remain a follow-up limitation, so photos should be captured through a browser that has already normalized orientation and must not be treated as physical-presence evidence. Exact observation time is not stored; the existing observation date and server save/audit timestamps remain separate, and legacy missing dates are not invented.
+
+### Optional property locations
+
+Users with property-management permission can enter latitude and longitude together when creating or editing a property. Coordinates are range-validated, remain nullable for existing properties, and appear read-only with an **Open in Maps** action when present. The link uses Google's official directions URL format and does not add a Maps SDK, API key, GPS tracking, proximity enforcement, or embedded map.
+
+### Manual Step 2 checklist
+
+1. On a fresh disposable database, apply all migrations, configure a phone-reachable `PublicAppBaseUrl`, and sign in as an authorized property administrator.
+2. Generate a QR label for a named unit, print/download it, rotate it, and confirm the previous link is rejected while the new link still requires login, property access, reading permission, and an explicit billing month.
+3. As assigned staff, open the room, capture a supported image or upload one, verify the preview and manual-confirmation checkbox, and confirm a failed upload/save keeps the input without showing **Saved**.
+4. Confirm the attached photo is visible only to authorized reading viewers, approved readings remain immutable, and no OCR suggestion is saved without staff confirmation. Treat OCR accuracy and real-phone camera/QR behavior as pending until manually inspected on a reachable device.
+5. Add coordinates as an authorized administrator and verify the read-only map action. Leave both fields blank for a property without a known location.

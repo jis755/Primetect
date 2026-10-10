@@ -5,12 +5,15 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Http.Features;
+using PrimeTect.Application.Abstractions;
 using PrimeTect.Api.Contracts;
 using PrimeTect.Api.Security;
 using PrimeTect.Domain.Entities;
 using PrimeTect.Domain.Enums;
 using PrimeTect.Infrastructure.Identity;
 using PrimeTect.Infrastructure.Persistence;
+using QRCoder;
 
 namespace PrimeTect.Api.Endpoints;
 
@@ -36,6 +39,9 @@ public static class PrimeTectEndpointMapping
         secure.MapPut("/properties/{propertyId:guid}/floors/{floorId:guid}", (Delegate)UpdateFloorAsync);
         secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}", (Delegate)UpdateUnitAsync);
         secure.MapPut("/properties/{propertyId:guid}/units/{unitId:guid}/occupancy-status", (Delegate)UpdateOccupancyStatusAsync);
+        secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/meter-qr", (Delegate)CreateMeterQrLinkAsync);
+        secure.MapGet("/properties/{propertyId:guid}/units/{unitId:guid}/meter-qr", (Delegate)GetMeterQrLinksAsync);
+        secure.MapPost("/meter-qr-links/{linkId:guid}/revoke", (Delegate)RevokeMeterQrLinkAsync);
         secure.MapGet("/staff", (Delegate)GetStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/staff/invitations", (Delegate)CreateInvitationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/properties/{propertyId:guid}/staff/{userId:guid}", (Delegate)AssignStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
@@ -63,6 +69,9 @@ public static class PrimeTectEndpointMapping
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/return", (Delegate)ReturnBillingCycleAsync);
         secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/approve", (Delegate)ApproveBillingCycleAsync);
         secure.MapGet("/properties/{propertyId:guid}/meter-overview/{billingMonth}", (Delegate)GetMeterOverviewAsync);
+        secure.MapGet("/meter-links/{token}", (Delegate)ResolveMeterQrLinkAsync);
+        secure.MapPost("/properties/{propertyId:guid}/billing-cycles/{billingCycleId:guid}/meter-photos/{unitBillId:guid}", (Delegate)UploadMeterPhotoAsync);
+        secure.MapGet("/meter-photos/{photoId:guid}", (Delegate)GetMeterPhotoAsync);
         secure.MapGet("/properties/{propertyId:guid}/room-meter-issues", (Delegate)GetRoomMeterIssuesAsync);
         secure.MapPost("/properties/{propertyId:guid}/units/{unitId:guid}/room-meter-issues", (Delegate)CreateRoomMeterIssueAsync);
         secure.MapPost("/properties/{propertyId:guid}/feedback-reports", (Delegate)CreateFeedbackReportAsync);
@@ -453,7 +462,7 @@ public static class PrimeTectEndpointMapping
             sortOrder = index,
             units = GetUnitNames(floor).Select((name, unitIndex) => new { name, sortOrder = unitIndex }).ToList(),
         }).ToList();
-        return Results.Ok(new { request.Name, request.Address, propertyType = request.PropertyType, floors });
+        return Results.Ok(new { request.Name, request.Address, request.Latitude, request.Longitude, propertyType = request.PropertyType, floors });
     }
 
     private static async Task<IResult> CreatePropertyAsync(
@@ -479,7 +488,7 @@ public static class PrimeTectEndpointMapping
             return BadRequest(error);
         }
 
-        var property = new Property(actor.OrganizationId, request.Name, request.Address, request.PropertyType, request.TimeZoneId);
+        var property = new Property(actor.OrganizationId, request.Name, request.Address, request.PropertyType, request.TimeZoneId, request.Latitude, request.Longitude);
         db.Properties.Add(property);
         for (var index = 0; index < request.Floors.Count; index++)
         {
@@ -522,7 +531,13 @@ public static class PrimeTectEndpointMapping
 
         try
         {
-            property.Update(request.Name, request.Address, request.PropertyType, request.TimeZoneId);
+            var locationError = ValidateCoordinates(request.Latitude, request.Longitude);
+            if (locationError is not null)
+            {
+                return BadRequest(locationError);
+            }
+
+            property.Update(request.Name, request.Address, request.PropertyType, request.TimeZoneId, request.Latitude, request.Longitude);
             property.SetArchived(request.IsArchived);
         }
         catch (ArgumentException exception)
@@ -696,6 +711,322 @@ public static class PrimeTectEndpointMapping
         await db.SaveChangesAsync(cancellationToken);
         return Results.Ok(new { unit.Id, occupancyStatus = unit.OccupancyStatus });
     }
+
+    private static async Task<IResult> CreateMeterQrLinkAsync(
+        Guid propertyId,
+        Guid unitId,
+        MeterQrCreateRequest request,
+        HttpContext httpContext,
+        IConfiguration configuration,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        var unit = await db.Units.FirstOrDefaultAsync(item => item.Id == unitId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (property is null || unit is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (!Enum.IsDefined(request.Placement))
+        {
+            return BadRequest("Choose whether the label will be placed on the room door or the electricity meter.");
+        }
+
+        string url;
+        try
+        {
+            var (plainText, hash) = SecurityTokens.CreateInvitationToken();
+            url = BuildMeterLinkUrl(configuration, plainText);
+
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+            var activeLinks = await db.MeterQrLinks
+                .Where(link => link.OrganizationId == actor.OrganizationId && link.PropertyId == propertyId && link.UnitId == unitId && link.RevokedAtUtc == null)
+                .ToListAsync(cancellationToken);
+            foreach (var activeLink in activeLinks)
+            {
+                activeLink.Revoke(actor.UserId);
+            }
+
+            var link = new MeterQrLink(actor.OrganizationId, propertyId, unitId, actor.UserId, hash, request.Placement);
+            db.MeterQrLinks.Add(link);
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            using var generator = new QRCodeGenerator();
+            using var qrData = generator.CreateQrCode(url, QRCodeGenerator.ECCLevel.Q);
+            var svg = new SvgQRCode(qrData).GetGraphic(5);
+            return Results.Created($"/api/properties/{propertyId}/units/{unitId}/meter-qr", ToMeterQrResponse(link, property.Name, unit.Name, url, svg));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+    }
+
+    private static async Task<IResult> GetMeterQrLinksAsync(
+        Guid propertyId,
+        Guid unitId,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: true).FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        var unit = await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == unitId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (property is null || unit is null)
+        {
+            return Results.NotFound();
+        }
+
+        var links = await db.MeterQrLinks.AsNoTracking()
+            .Where(link => link.OrganizationId == actor.OrganizationId && link.PropertyId == propertyId && link.UnitId == unitId)
+            .OrderByDescending(link => link.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(links.Select(link => ToMeterQrResponse(link, property.Name, unit.Name, string.Empty, string.Empty)).ToList());
+    }
+
+    private static async Task<IResult> RevokeMeterQrLinkAsync(
+        Guid linkId,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ManageProperties, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var link = await db.MeterQrLinks.FirstOrDefaultAsync(item => item.Id == linkId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (link is null || await AccessibleProperties(db, actor, includeArchived: true).AllAsync(item => item.Id != link.PropertyId, cancellationToken))
+        {
+            return Results.NotFound();
+        }
+
+        link.Revoke(actor.UserId);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> ResolveMeterQrLinkAsync(
+        string token,
+        string? billingMonth,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewMeterReadings, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(billingMonth) || !DateOnly.TryParseExact(billingMonth, "yyyy-MM", out var month))
+        {
+            return BadRequest("Choose a billing month before opening a meter link.");
+        }
+
+        var hash = SecurityTokens.Hash(token);
+        var link = await db.MeterQrLinks.AsNoTracking().FirstOrDefaultAsync(item => item.TokenHash == hash && item.RevokedAtUtc == null, cancellationToken);
+        if (link is null)
+        {
+            return Results.NotFound(new { message = "This meter QR link is invalid or has been revoked." });
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false).AsNoTracking().FirstOrDefaultAsync(item => item.Id == link.PropertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        var unit = await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == link.UnitId && item.PropertyId == link.PropertyId && item.OrganizationId == actor.OrganizationId && item.IsEnabled && !item.IsArchived, cancellationToken);
+        if (property is null || unit is null)
+        {
+            return Results.NotFound(new { message = "This meter QR link is not available for your current property access." });
+        }
+
+        return Results.Ok(new MeterQrResolveResponse(property.Id, unit.Id, property.Name, unit.Name, month.ToString("yyyy-MM"), true));
+    }
+
+    private static async Task<IResult> UploadMeterPhotoAsync(
+        Guid propertyId,
+        Guid billingCycleId,
+        Guid unitBillId,
+        IFormFile file,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        IMeterPhotoStorage storage,
+        IMeterOcrProvider ocrProvider,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.EditMeterReadings, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        if (file is null || file.Length == 0)
+        {
+            return BadRequest("Choose a meter photo before uploading.");
+        }
+
+        var cycle = await AccessibleBillingCycleAsync(db, actor, propertyId, billingCycleId, cancellationToken);
+        if (cycle is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (cycle.Status is not (BillingCycleStatus.Draft or BillingCycleStatus.Returned))
+        {
+            return Results.Conflict(new { message = "Submitted and approved billing cycles cannot receive new photos." });
+        }
+
+        var bill = await db.BillingUnitBills.AsNoTracking().FirstOrDefaultAsync(item => item.Id == unitBillId && item.BillingCycleId == cycle.Id && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (bill is null)
+        {
+            return BadRequest("The meter photo must identify the selected room bill.");
+        }
+
+        var property = await AccessibleProperties(db, actor, includeArchived: false).AsNoTracking().FirstOrDefaultAsync(item => item.Id == propertyId, cancellationToken);
+        var electricity = await db.BillingChargeLines.AsNoTracking().FirstOrDefaultAsync(item => item.BillingUnitBillId == bill.Id && item.OrganizationId == actor.OrganizationId && item.ChargeType == ChargeType.Electricity, cancellationToken);
+        if (property is null || electricity is null)
+        {
+            return BadRequest("A meter photo can only be attached to an applicable electricity reading.");
+        }
+
+        StoredMeterPhoto stored;
+        try
+        {
+            await using var input = file.OpenReadStream();
+            stored = await storage.StoreAsync(input, file.ContentType, file.FileName, cancellationToken);
+        }
+        catch (InvalidDataException exception)
+        {
+            return BadRequest(exception.Message);
+        }
+
+        MeterOcrSuggestion suggestion;
+        await using (var storedPhoto = await storage.OpenReadAsync(stored.StorageKey, cancellationToken))
+        {
+            suggestion = storedPhoto is null
+                ? new MeterOcrSuggestion(null, "Unavailable", ocrProvider.ProviderName, null, "The stored photo could not be reopened; confirm the reading manually.")
+                : await ocrProvider.SuggestAsync(storedPhoto, cancellationToken);
+        }
+
+        var photo = new MeterPhoto(
+            actor.OrganizationId,
+            propertyId,
+            cycle.Id,
+            bill.Id,
+            bill.UnitId,
+            actor.UserId,
+            stored.StorageKey,
+            stored.ContentType,
+            stored.FileExtension,
+            stored.ByteLength,
+            stored.Width,
+            stored.Height,
+            stored.OriginalFileName,
+            suggestion.Outcome,
+            suggestion.ProviderVersion,
+            suggestion.SuggestedReading,
+            suggestion.Confidence);
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.MeterPhotos.Add(photo);
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Created($"/api/meter-photos/{photo.Id}", ToMeterPhotoResponse(photo, suggestion.Explanation));
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            await storage.DeleteAsync(stored.StorageKey, cancellationToken);
+            return Results.Problem(detail: "The meter photo was not saved. No reading or billing data was changed.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static async Task<IResult> GetMeterPhotoAsync(
+        Guid photoId,
+        HttpContext httpContext,
+        PropertyManagementDbContext db,
+        IMeterPhotoStorage storage,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!await OrganizationPermissionAuthorization.HasAsync(db, actor, OrganizationPermission.ViewMeterReadings, cancellationToken))
+        {
+            return Results.Forbid();
+        }
+
+        var photo = await db.MeterPhotos.AsNoTracking().FirstOrDefaultAsync(item => item.Id == photoId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (photo is null || await AccessibleProperties(db, actor, includeArchived: false).AllAsync(item => item.Id != photo.PropertyId, cancellationToken))
+        {
+            return Results.NotFound();
+        }
+
+        var stream = await storage.OpenReadAsync(photo.StorageKey, cancellationToken);
+        return stream is null
+            ? Results.NotFound()
+            : Results.File(stream, photo.ContentType, enableRangeProcessing: false);
+    }
+
+    private static string BuildMeterLinkUrl(IConfiguration configuration, string token)
+    {
+        var configured = configuration["PublicAppBaseUrl"] ?? configuration["Frontend:PublicBaseUrl"] ?? "http://localhost:3000";
+        if (!Uri.TryCreate(configured, UriKind.Absolute, out var baseUri) || baseUri.Scheme is not ("http" or "https"))
+        {
+            throw new InvalidOperationException("PublicAppBaseUrl must be an absolute http or https application URL before generating QR labels.");
+        }
+
+        return $"{baseUri.ToString().TrimEnd('/')}/?meterLink={Uri.EscapeDataString(token)}";
+    }
+
+    private static MeterQrResponse ToMeterQrResponse(MeterQrLink link, string propertyName, string unitName, string url, string svg) =>
+        new(link.Id, link.PropertyId, link.UnitId, propertyName, unitName, link.Placement, url, svg, link.CreatedAtUtc, link.RevokedAtUtc, link.IsActive);
+
+    private static MeterPhotoResponse ToMeterPhotoResponse(MeterPhoto photo, string? ocrExplanation = null) =>
+        new(photo.Id, photo.PropertyId, photo.UnitId, photo.BillingCycleId, photo.BillingUnitBillId, photo.ContentType, photo.FileExtension, photo.ByteLength, photo.Width, photo.Height, photo.OriginalFileName, photo.OcrOutcome, photo.OcrProviderVersion, photo.OcrSuggestion, photo.OcrConfidence, ocrExplanation ?? (photo.OcrOutcome == "Unavailable" ? "Local OCR is not configured; confirm the reading manually." : null), photo.Status, photo.Status == MeterPhotoStatus.Attached, $"/api/meter-photos/{photo.Id}");
 
     private static async Task<IResult> GetStaffAsync(
         HttpContext httpContext,
@@ -1813,6 +2144,10 @@ public static class PrimeTectEndpointMapping
         var billById = bills.ToDictionary(bill => bill.Id);
         var lines = await db.BillingChargeLines.Where(line => line.OrganizationId == actor.OrganizationId && billById.Keys.Contains(line.BillingUnitBillId) && line.ChargeType == ChargeType.Electricity).ToListAsync(cancellationToken);
         var lineByBillId = lines.ToDictionary(line => line.BillingUnitBillId);
+        var requestedPhotoIds = (request.Entries ?? []).Where(entry => entry.MeterPhotoId.HasValue).Select(entry => entry.MeterPhotoId!.Value).Distinct().ToArray();
+        var photosById = requestedPhotoIds.Length == 0
+            ? new Dictionary<Guid, MeterPhoto>()
+            : await db.MeterPhotos.Where(photo => requestedPhotoIds.Contains(photo.Id) && photo.OrganizationId == actor.OrganizationId).ToDictionaryAsync(photo => photo.Id, cancellationToken);
         var before = new List<object>();
 
         foreach (var entry in request.Entries ?? [])
@@ -1820,6 +2155,16 @@ public static class PrimeTectEndpointMapping
             if (!billById.ContainsKey(entry.UnitBillId) || !lineByBillId.TryGetValue(entry.UnitBillId, out var line))
             {
                 return BadRequest("Every meter entry must reference an electricity line in this billing cycle.");
+            }
+
+            if (entry.MeterPhotoId is not null
+                && (!photosById.TryGetValue(entry.MeterPhotoId.Value, out var photo)
+                    || photo.BillingCycleId != cycle.Id
+                    || photo.BillingUnitBillId != entry.UnitBillId
+                    || photo.UnitId != billById[entry.UnitBillId].UnitId
+                    || photo.Status == MeterPhotoStatus.Orphaned))
+            {
+                return BadRequest("The selected meter photo does not belong to this room and billing month.");
             }
 
             if (line.PreviousReadingSource == MeterReadingSource.ApprovedPeriod && entry.PreviousReading is not null && entry.PreviousReading != line.PreviousReading)
@@ -1838,7 +2183,7 @@ public static class PrimeTectEndpointMapping
                 return BadRequest("Negative electricity consumption is not allowed. Meter reset or replacement needs a separate documented workflow.");
             }
 
-            before.Add(new { entry.UnitBillId, line.PreviousReading, line.PreviousReadingDate, line.CurrentReading, line.CurrentReadingDate, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource });
+            before.Add(new { entry.UnitBillId, line.PreviousReading, line.PreviousReadingDate, line.CurrentReading, line.CurrentReadingDate, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource, line.MeterPhotoId });
         }
 
         if (request.Entries is null || request.Entries.Count == 0)
@@ -1862,13 +2207,18 @@ public static class PrimeTectEndpointMapping
                     ? line.PreviousReadingDate
                     : entry.PreviousReadingDate;
                 line.SetMeterReadings(previous, previousDate, entry.CurrentReading, entry.CurrentReadingDate, source, units, amount);
+                if (entry.MeterPhotoId is not null)
+                {
+                    line.SetMeterPhoto(entry.MeterPhotoId);
+                    photosById[entry.MeterPhotoId.Value].Attach(actor.UserId, entry.CurrentReading);
+                }
                 RecalculateBillState(billById[entry.UnitBillId], lines.Where(item => item.BillingUnitBillId == entry.UnitBillId));
             }
 
             var after = request.Entries.Select(entry =>
             {
                 var line = lineByBillId[entry.UnitBillId];
-                return new { entry.UnitBillId, line.PreviousReading, line.PreviousReadingDate, line.CurrentReading, line.CurrentReadingDate, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource };
+                return new { entry.UnitBillId, line.PreviousReading, line.PreviousReadingDate, line.CurrentReading, line.CurrentReadingDate, line.ConsumptionUnits, line.Amount, line.PreviousReadingSource, line.MeterPhotoId };
             }).ToList();
             cycle.MarkDataChanged(actor.UserId);
             db.BillingAuditEntries.Add(new BillingAuditEntry(actor.OrganizationId, cycle.Id, actor.UserId, BillingAuditAction.Saved, request.Reason, JsonSerializer.Serialize(before), JsonSerializer.Serialize(after)));
@@ -3779,7 +4129,8 @@ public static class PrimeTectEndpointMapping
                 line.ConsumptionUnits,
                 line.WarningEnabled,
                 line.WarningThreshold,
-                line.Amount)).ToList());
+                line.Amount,
+                line.MeterPhotoId)).ToList());
 
     private static async Task<ComparisonSource> LoadComparisonSourceAsync(
         PropertyManagementDbContext db,
@@ -3953,7 +4304,8 @@ public static class PrimeTectEndpointMapping
                 line.PreviousReadingSource,
                 line.WarningEnabled,
                 line.WarningThreshold,
-                line.Amount)).ToList())).ToList();
+                line.Amount,
+                line.MeterPhotoId)).ToList())).ToList();
         return new BillingCycleResponse(
             cycle.Id,
             cycle.PropertyId,
@@ -4119,7 +4471,7 @@ public static class PrimeTectEndpointMapping
             floor.SortOrder,
             floor.IsArchived,
             units.Where(unit => unit.FloorId == floor.Id).Select(unit => new UnitResponse(unit.Id, unit.Name, unit.IsEnabled, unit.IsArchived, unit.OccupancyStatus)).ToList())).ToList();
-        return new PropertyResponse(property.Id, property.Name, property.Address, property.PropertyType, property.IsArchived, floorResponses, property.TimeZoneId);
+        return new PropertyResponse(property.Id, property.Name, property.Address, property.PropertyType, property.IsArchived, floorResponses, property.TimeZoneId, property.Latitude, property.Longitude);
     }
 
     private static AppUser NewUser(Guid organizationId, string email, string fullName, UserRole role) => new()
@@ -4152,6 +4504,12 @@ public static class PrimeTectEndpointMapping
             return "Property name and address are required.";
         }
 
+        var coordinateError = ValidateCoordinates(request.Latitude, request.Longitude);
+        if (coordinateError is not null)
+        {
+            return coordinateError;
+        }
+
         if (request.Floors is null || request.Floors.Count == 0)
         {
             return "At least one floor is required.";
@@ -4161,6 +4519,23 @@ public static class PrimeTectEndpointMapping
         return names.Any(string.IsNullOrWhiteSpace) || names.Count != names.Distinct(StringComparer.OrdinalIgnoreCase).Count()
             ? "Floor names must be present and unique."
             : request.Floors.Select(ValidateFloorDraft).FirstOrDefault(error => error is not null);
+    }
+
+    private static string? ValidateCoordinates(decimal? latitude, decimal? longitude)
+    {
+        if (latitude is null && longitude is null)
+        {
+            return null;
+        }
+
+        if (latitude is null || longitude is null)
+        {
+            return "Latitude and longitude must be entered together, or both left blank.";
+        }
+
+        return latitude is < -90m or > 90m || longitude is < -180m or > 180m
+            ? "Latitude must be between -90 and 90, and longitude must be between -180 and 180."
+            : null;
     }
 
     private static string? ValidateFloorDraft(FloorDraft floor)

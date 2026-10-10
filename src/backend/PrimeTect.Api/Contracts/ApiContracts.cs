@@ -10,9 +10,9 @@ public sealed record InvitationRequest(string Email, UserRole Role);
 
 public sealed record AcceptInvitationRequest(string Token, string FullName, string Password);
 
-public sealed record PropertySetupRequest(string Name, string Address, PropertyType PropertyType, IReadOnlyList<FloorDraft> Floors, string? TimeZoneId = null);
+public sealed record PropertySetupRequest(string Name, string Address, PropertyType PropertyType, IReadOnlyList<FloorDraft> Floors, string? TimeZoneId = null, decimal? Latitude = null, decimal? Longitude = null);
 
-public sealed record PropertyUpdateRequest(string Name, string Address, PropertyType PropertyType, bool IsArchived, string? TimeZoneId = null);
+public sealed record PropertyUpdateRequest(string Name, string Address, PropertyType PropertyType, bool IsArchived, string? TimeZoneId = null, decimal? Latitude = null, decimal? Longitude = null);
 
 public sealed record FloorDraft(string Name, int UnitCount, IReadOnlyList<string>? UnitNames);
 
@@ -48,7 +48,8 @@ public sealed record MeterReadingEntryRequest(
     decimal? PreviousReading,
     decimal? CurrentReading,
     DateOnly? PreviousReadingDate = null,
-    DateOnly? CurrentReadingDate = null);
+    DateOnly? CurrentReadingDate = null,
+    Guid? MeterPhotoId = null);
 
 public sealed record EndChargeRequest(DateOnly BillingMonth);
 
@@ -207,6 +208,50 @@ public sealed record NotificationResponse(
     DateTimeOffset? ReadAtUtc,
     bool IsRead);
 
+public sealed record MeterQrCreateRequest(MeterQrPlacement Placement);
+
+public sealed record MeterQrResponse(
+    Guid Id,
+    Guid PropertyId,
+    Guid UnitId,
+    string PropertyName,
+    string UnitName,
+    MeterQrPlacement Placement,
+    string Url,
+    string Svg,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? RevokedAtUtc,
+    bool IsActive);
+
+public sealed record MeterQrResolveResponse(
+    Guid PropertyId,
+    Guid UnitId,
+    string PropertyName,
+    string UnitName,
+    string BillingMonth,
+    bool IsActive);
+
+public sealed record MeterPhotoResponse(
+    Guid Id,
+    Guid PropertyId,
+    Guid UnitId,
+    Guid BillingCycleId,
+    Guid BillingUnitBillId,
+    string ContentType,
+    string FileExtension,
+    long ByteLength,
+    int Width,
+    int Height,
+    string? OriginalFileName,
+    string OcrOutcome,
+    string? OcrProviderVersion,
+    decimal? OcrSuggestion,
+    decimal? OcrConfidence,
+    string? OcrExplanation,
+    MeterPhotoStatus Status,
+    bool IsAttached,
+    string PhotoUrl);
+
 public sealed record MeterRoomOverviewResponse(
     Guid UnitId,
     string UnitName,
@@ -237,7 +282,7 @@ public sealed record UnitResponse(Guid Id, string Name, bool IsEnabled, bool IsA
 
 public sealed record FloorResponse(Guid Id, string Name, int SortOrder, bool IsArchived, IReadOnlyList<UnitResponse> Units);
 
-public sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, IReadOnlyList<FloorResponse> Floors, string TimeZoneId);
+public sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, IReadOnlyList<FloorResponse> Floors, string TimeZoneId, decimal? Latitude, decimal? Longitude);
 
 public sealed record TenantCurrentUnitResponse(Guid PropertyId, string PropertyName, Guid UnitId, string UnitName, DateOnly StartDate);
 
@@ -274,7 +319,8 @@ public sealed record BillingChargeLineResponse(
     MeterReadingSource PreviousReadingSource,
     bool WarningEnabled,
     decimal? WarningThreshold,
-    decimal Amount);
+    decimal Amount,
+    Guid? MeterPhotoId);
 
 public sealed record BillingUnitBillResponse(
     Guid Id,
@@ -329,7 +375,8 @@ public sealed record BillingStatementChargeResponse(
     decimal? ConsumptionUnits,
     bool WarningEnabled,
     decimal? WarningThreshold,
-    decimal Amount);
+    decimal Amount,
+    Guid? MeterPhotoId);
 
 public sealed record BillingStatementUnitResponse(
     string BillReference,

@@ -45,6 +45,10 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<RoomMeterIssueAuditEntry> RoomMeterIssueAuditEntries => Set<RoomMeterIssueAuditEntry>();
 
+    public DbSet<MeterQrLink> MeterQrLinks => Set<MeterQrLink>();
+
+    public DbSet<MeterPhoto> MeterPhotos => Set<MeterPhoto>();
+
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
 
     public DbSet<OrganizationRolePermission> OrganizationRolePermissions => Set<OrganizationRolePermission>();
@@ -101,6 +105,8 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(property => property.Address).HasMaxLength(500).IsRequired();
             entity.Property(property => property.PropertyType).HasConversion<string>().HasMaxLength(50).IsRequired();
             entity.Property(property => property.TimeZoneId).HasMaxLength(100).IsRequired();
+            entity.Property(property => property.Latitude).HasPrecision(9, 6);
+            entity.Property(property => property.Longitude).HasPrecision(9, 6);
             entity.HasIndex(property => new { property.OrganizationId, property.Name });
             entity.HasOne<Organization>().WithMany().HasForeignKey(property => property.OrganizationId).OnDelete(DeleteBehavior.Restrict);
         });
@@ -227,6 +233,7 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(line => line.ConsumptionUnits).HasPrecision(18, 4);
             entity.Property(line => line.Amount).HasPrecision(18, 2);
             entity.Property(line => line.WarningThreshold).HasPrecision(18, 2);
+            entity.HasOne<MeterPhoto>().WithMany().HasForeignKey(line => line.MeterPhotoId).OnDelete(DeleteBehavior.SetNull);
             entity.HasIndex(line => new { line.BillingUnitBillId, line.ChargeType }).IsUnique();
             entity.HasOne<BillingUnitBill>().WithMany().HasForeignKey(line => line.BillingUnitBillId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -329,6 +336,40 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.HasIndex(notification => new { notification.OrganizationId, notification.RecipientUserId, notification.RoomMeterIssueId }).IsUnique();
             entity.HasOne<Property>().WithMany().HasForeignKey(notification => notification.PropertyId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<RoomMeterIssue>().WithMany().HasForeignKey(notification => notification.RoomMeterIssueId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MeterQrLink>(entity =>
+        {
+            entity.ToTable("meter_qr_links");
+            entity.HasKey(link => link.Id);
+            entity.Property(link => link.TokenHash).HasMaxLength(128).IsRequired();
+            entity.Property(link => link.Placement).HasConversion<string>().HasMaxLength(30).IsRequired();
+            entity.HasIndex(link => link.TokenHash).IsUnique();
+            entity.HasIndex(link => new { link.OrganizationId, link.PropertyId, link.UnitId, link.RevokedAtUtc });
+            entity.HasOne<Property>().WithMany().HasForeignKey(link => link.PropertyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Unit>().WithMany().HasForeignKey(link => link.UnitId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MeterPhoto>(entity =>
+        {
+            entity.ToTable("meter_photos");
+            entity.HasKey(photo => photo.Id);
+            entity.Property(photo => photo.StorageKey).HasMaxLength(120).IsRequired();
+            entity.Property(photo => photo.ContentType).HasMaxLength(80).IsRequired();
+            entity.Property(photo => photo.FileExtension).HasMaxLength(10).IsRequired();
+            entity.Property(photo => photo.OriginalFileName).HasMaxLength(120);
+            entity.Property(photo => photo.OcrOutcome).HasMaxLength(40).IsRequired();
+            entity.Property(photo => photo.OcrProviderVersion).HasMaxLength(100);
+            entity.Property(photo => photo.OcrSuggestion).HasPrecision(18, 4);
+            entity.Property(photo => photo.OcrConfidence).HasPrecision(5, 4);
+            entity.Property(photo => photo.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(photo => photo.ConfirmedReading).HasPrecision(18, 4);
+            entity.HasIndex(photo => new { photo.OrganizationId, photo.BillingCycleId, photo.UnitId, photo.Status });
+            entity.HasIndex(photo => new { photo.OrganizationId, photo.StorageKey }).IsUnique();
+            entity.HasOne<Property>().WithMany().HasForeignKey(photo => photo.PropertyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<BillingCycle>().WithMany().HasForeignKey(photo => photo.BillingCycleId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<BillingUnitBill>().WithMany().HasForeignKey(photo => photo.BillingUnitBillId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Unit>().WithMany().HasForeignKey(photo => photo.UnitId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

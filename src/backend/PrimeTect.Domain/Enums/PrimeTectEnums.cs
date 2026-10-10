@@ -143,6 +143,19 @@ public enum RoomMeterIssueAuditAction
     Resolved = 3,
 }
 
+public enum MeterQrPlacement
+{
+    RoomDoor = 1,
+    ElectricityMeter = 2,
+}
+
+public enum MeterPhotoStatus
+{
+    Staged = 1,
+    Attached = 2,
+    Orphaned = 3,
+}
+
 public enum OnboardingStatus
 {
     NotConnected = 1,

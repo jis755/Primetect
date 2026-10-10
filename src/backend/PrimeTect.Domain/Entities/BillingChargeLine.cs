@@ -71,6 +71,8 @@ public sealed class BillingChargeLine
 
     public decimal Amount { get; private set; }
 
+    public Guid? MeterPhotoId { get; private set; }
+
     public void SetMeterReadings(
         decimal? previousReading,
         DateOnly? previousReadingDate,
@@ -88,6 +90,8 @@ public sealed class BillingChargeLine
         ConsumptionUnits = consumptionUnits;
         Amount = amount;
     }
+
+    public void SetMeterPhoto(Guid? meterPhotoId) => MeterPhotoId = meterPhotoId;
 
     public DateOnly? CurrentReadingDate { get; private set; }
 }
