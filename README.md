@@ -346,6 +346,41 @@ Short manual usability checklist:
 The frontend's dependency-free `npm.cmd run test:ui` covers room-advance, failed-save draft preservation, Bangla numeric
 normalization, and current-remaining-balance amount rules. It runs separately from the production build.
 
+### Dashboard polish and verification notes
+
+The simplified staff/manager home now keeps the selected property and billing month in one shared context. The property picker is hidden when only one assigned property is available. Reading progress is loaded from the existing `meter-overview` endpoint and counts only applicable metered units; saved drafts, submitted cycles, returned corrections, and approved cycles remain separate. **View all rooms** and **Open unfinished rooms** keep the selected property and month rather than falling back to the first property.
+
+The Admin home uses the existing per-property collection, meter-overview, and room/meter-issue endpoints. It summarizes approved billed totals, approved manual receipts net of approved reversals, confirmed outstanding balances, and pending reported receipts separately. Missing or unapproved billing coverage is labeled incomplete rather than treated as zero. Because there is no aggregate dashboard API in this milestone, the Admin overview loads one aggregate request per property (not one request per unit); larger organizations may need a future server-side aggregate endpoint for faster loading. Property-specific attention buttons always identify the property before opening rooms, reviews, or issues.
+
+The UI tests cover the applicable-unit denominator, distinct draft/review/approved states, save-before-advance behavior, failed-save draft preservation, Bangla numeric normalization, and current remaining-balance rules. Run checks sequentially:
+
+```powershell
+Push-Location src/frontend
+npm.cmd run test:ui
+npm.cmd run typecheck
+npm.cmd run build
+Pop-Location
+```
+
+For the existing local demo API, verify that the API process is listening on `http://127.0.0.1:5001` and that its ignored `src/backend/PrimeTect.Api/appsettings.GuidedDemo.json` is the intended local configuration before starting a frontend. The frontend defaults to port 5000, so point it at the running API explicitly:
+
+```powershell
+Push-Location src/frontend
+$env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:5001"
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3000
+Pop-Location
+```
+
+Open `http://127.0.0.1:3000`. Stop only the frontend process you started with `Ctrl+C`; do not stop the already-running API unless you own that process. Credentials remain in the ignored local demo credential file documented earlier in this README and are never printed or committed.
+
+Manual usability checklist:
+
+1. As a staff/manager user, confirm the three permitted task cards, property/month context, applicable-unit progress, **View all rooms**, unfinished-room shortcut, and no arbitrary first-property fallback.
+2. Enter one reading, switch বাংলা / English, and confirm the room, month, input, and observation date remain unchanged. Save and confirm the success response before moving to the next room.
+3. Report a partial collection and confirm the selected bill, remaining amount, pending report, and confirmation text stay distinct.
+4. Report a room/meter problem without entering a reading, then open **View all rooms** and confirm the issue indicator and non-metered **Not applicable** rows.
+5. As Finance, review/return a collection; as Admin, inspect the property overview, incomplete coverage notice, billing review, collection review, issue view, and responsive layout at a narrow width.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:

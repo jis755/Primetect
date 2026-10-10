@@ -13,3 +13,22 @@ export function reportableCollectionAmount(raw: string, remaining: number | null
 export function preserveRoomDraftAfterFailure(currentReading: string, observationDate: string) {
   return { currentReading, observationDate };
 }
+
+export type MeterProgressUnit = {
+  electricityApplicable: boolean;
+  readingStatus: string;
+};
+
+export function summarizeMeterProgress(units: MeterProgressUnit[]) {
+  const applicable = units.filter((unit) => unit.electricityApplicable);
+  const missing = applicable.filter((unit) => unit.readingStatus === "NoDraft" || unit.readingStatus === "Missing").length;
+  return {
+    applicable: applicable.length,
+    entered: applicable.length - missing,
+    missing,
+    savedDraft: applicable.filter((unit) => unit.readingStatus === "SavedDraft").length,
+    awaitingReview: applicable.filter((unit) => unit.readingStatus === "AwaitingReview").length,
+    returned: applicable.filter((unit) => unit.readingStatus === "Returned").length,
+    approved: applicable.filter((unit) => unit.readingStatus === "Approved").length,
+  };
+}
