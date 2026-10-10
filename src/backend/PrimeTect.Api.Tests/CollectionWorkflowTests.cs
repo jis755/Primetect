@@ -92,6 +92,59 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
         var financeUser = await AcceptInvitationAsync(finance, financeInvitation.InvitationToken, "Finance Manager");
         Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{financeUser.Id}", null)).StatusCode);
 
+        var balanceProperty = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Balance Property {suffix}",
+            address = "9 Balance Street",
+            propertyType = "ApartmentBuilding",
+            floors = new[] { new { name = "Ground", unitCount = 2, unitNames = new[] { "B-1", "B-2" } } },
+        }));
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{balanceProperty.Id}/staff/{managerUser.Id}", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{balanceProperty.Id}/staff/{financeUser.Id}", null)).StatusCode);
+        var balanceTenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = (string?)null, phone = (string?)null }));
+        foreach (var balanceUnit in balanceProperty.Floors.SelectMany(floor => floor.Units))
+        {
+            Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{balanceProperty.Id}/units/{balanceUnit.Id}/occupancy", new
+            {
+                tenantId = balanceTenant.Id,
+                startDate = "2026-01-01",
+                endDate = (string?)null,
+            })).StatusCode);
+        }
+        await SaveChargeAsync(admin, balanceProperty.Id, 200m);
+        var balanceDraft = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{balanceProperty.Id}/billing-cycles", new { billingMonth = "2026-01-01" }));
+        var balanceSubmitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{balanceProperty.Id}/billing-cycles/{balanceDraft.Id}/submit", new { expectedVersion = balanceDraft.Version }));
+        var balanceApproved = await ReadAsync<BillingCycleResponse>(await secondAdmin.PostAsJsonAsync($"/api/properties/{balanceProperty.Id}/billing-cycles/{balanceDraft.Id}/approve", new { expectedVersion = balanceSubmitted.Version }));
+        var acceptedWholeAmount = await ReadAsync<CollectionReportResponse>(await manager.PostAsJsonAsync($"/api/properties/{balanceProperty.Id}/collection-reports", new
+        {
+            billingUnitBillId = balanceApproved.Bills.Single(bill => bill.UnitName == "B-1").Id,
+            amountReceived = 199.00m,
+            receivedDate = "2026-01-10",
+            paymentMethod = "Cash",
+            submissionKey = Guid.NewGuid(),
+        }));
+        Assert.Equal(199.00m, acceptedWholeAmount.AmountReceived);
+        Assert.Equal(CollectionReportStatus.Pending, acceptedWholeAmount.Status);
+        var oneUnitReport = await ReadAsync<CollectionReportResponse>(await manager.PostAsJsonAsync($"/api/properties/{balanceProperty.Id}/collection-reports", new
+        {
+            billingUnitBillId = balanceApproved.Bills.Single(bill => bill.UnitName == "B-2").Id,
+            amountReceived = 1m,
+            receivedDate = "2026-01-10",
+            paymentMethod = "Cash",
+            submissionKey = Guid.NewGuid(),
+        }));
+        var oneUnitApproved = await ReadAsync<CollectionReportResponse>(await finance.PostAsJsonAsync($"/api/collection-reports/{oneUnitReport.Id}/approve", new { expectedVersion = oneUnitReport.Version }));
+        Assert.Equal(CollectionReportStatus.Approved, oneUnitApproved.Status);
+        Assert.Equal(1m, oneUnitApproved.ConfirmedCollectedAmount);
+        Assert.Equal(HttpStatusCode.BadRequest, (await manager.PostAsJsonAsync($"/api/properties/{balanceProperty.Id}/collection-reports", new
+        {
+            billingUnitBillId = balanceApproved.Bills.Single(bill => bill.UnitName == "B-2").Id,
+            amountReceived = 199.01m,
+            receivedDate = "2026-01-10",
+            paymentMethod = "Cash",
+            submissionKey = Guid.NewGuid(),
+        })).StatusCode);
+
         Assert.Equal(HttpStatusCode.Forbidden, (await manager.PostAsJsonAsync("/api/properties", new
         {
             name = "Not allowed",
