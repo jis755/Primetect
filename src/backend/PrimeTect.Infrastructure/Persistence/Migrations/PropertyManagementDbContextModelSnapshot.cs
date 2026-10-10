@@ -908,6 +908,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<Guid?>("SubmissionKey")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Target")
                         .IsRequired()
                         .HasMaxLength(40)
@@ -927,6 +930,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasIndex("UnitId");
 
                     b.HasIndex("OrganizationId", "CreatedAtUtc");
+
+                    b.HasIndex("OrganizationId", "ReporterUserId", "SubmissionKey")
+                        .IsUnique();
 
                     b.HasIndex("OrganizationId", "PropertyId", "UnitId", "Status");
 

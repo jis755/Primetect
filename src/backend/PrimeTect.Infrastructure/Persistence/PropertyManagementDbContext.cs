@@ -297,10 +297,12 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(issue => issue.Description).HasMaxLength(2000).IsRequired();
             entity.Property(issue => issue.ObservedDate).HasColumnType("date");
             entity.Property(issue => issue.Target).HasConversion<string>().HasMaxLength(40).IsRequired();
+            entity.Property(issue => issue.SubmissionKey);
             entity.Property(issue => issue.Status).HasConversion<string>().HasMaxLength(30).IsRequired();
             entity.Property(issue => issue.Version).IsConcurrencyToken();
             entity.Property(issue => issue.ResolutionReason).HasMaxLength(500);
             entity.HasIndex(issue => new { issue.OrganizationId, issue.PropertyId, issue.UnitId, issue.Status });
+            entity.HasIndex(issue => new { issue.OrganizationId, issue.ReporterUserId, issue.SubmissionKey }).IsUnique();
             entity.HasIndex(issue => new { issue.OrganizationId, issue.CreatedAtUtc });
             entity.HasOne<Property>().WithMany().HasForeignKey(issue => issue.PropertyId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<Unit>().WithMany().HasForeignKey(issue => issue.UnitId).OnDelete(DeleteBehavior.Restrict);

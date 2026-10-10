@@ -89,9 +89,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 9 || pending.Any())
+            if (applied.Count() != 10 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected nine applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected ten applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)
@@ -292,13 +292,153 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(9L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(10L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "ConsumptionUnits"));
         Assert.Equal((18, 2), await NumericDefinitionAsync(connection, "billing_charge_lines", "Amount"));
         Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'billing_cycles' AND indexname = 'IX_billing_cycles_OrganizationId_PropertyId_BillingMonth' AND indexdef LIKE '%UNIQUE%'"));
+    }
+
+    [PostgresFact]
+    public async Task PostgreSQL_feedback_http_workflow_preserves_targets_notifications_and_authorization()
+    {
+        RequirePostgres();
+
+        using var api = new PostgresPrimeTectApiFactory(database.ConnectionString);
+        using var admin = api.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        await RegisterAsync(admin, $"feedback-pg-admin-{suffix}@example.test", "Feedback PostgreSQL Admin");
+
+        var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Feedback PostgreSQL Property {suffix}",
+            address = "12 Verification Street",
+            propertyType = "ApartmentBuilding",
+            timeZoneId = "Asia/Dhaka",
+            floors = new[]
+            {
+                new { name = "Ground", unitCount = 1, unitNames = new[] { "2A" } },
+                new { name = "Upper", unitCount = 1, unitNames = new[] { "6B" } },
+            },
+        }));
+        var unit = property.Floors.SelectMany(floor => floor.Units).Single(item => item.Name == "6B");
+
+        using var staff = api.CreateClient();
+        var staffInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"feedback-pg-staff-{suffix}@example.test", role = "BuildingStaff" }));
+        var staffUser = await AcceptInvitationAsync(staff, staffInvitation.InvitationToken, "Feedback PostgreSQL Staff");
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{staffUser.Id}", null)).StatusCode);
+
+        using var manager = api.CreateClient();
+        var managerInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"feedback-pg-manager-{suffix}@example.test", role = "Manager" }));
+        var managerUser = await AcceptInvitationAsync(manager, managerInvitation.InvitationToken, "Feedback PostgreSQL Reviewer");
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{managerUser.Id}", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/role-permissions", new
+        {
+            role = "Manager",
+            permissions = new Dictionary<string, bool> { ["ReviewRoomMeterIssues"] = true },
+            reason = "Disposable feedback endpoint verification",
+        })).StatusCode);
+
+        using var finance = api.CreateClient();
+        var financeInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"feedback-pg-finance-{suffix}@example.test", role = "FinanceManager" }));
+        var financeUser = await AcceptInvitationAsync(finance, financeInvitation.InvitationToken, "Feedback PostgreSQL Finance");
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/properties/{property.Id}/staff/{financeUser.Id}", null)).StatusCode);
+
+        using var unassignedReviewer = api.CreateClient();
+        var unassignedInvitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"feedback-pg-unassigned-{suffix}@example.test", role = "Manager" }));
+        await AcceptInvitationAsync(unassignedReviewer, unassignedInvitation.InvitationToken, "Unassigned Feedback Reviewer");
+
+        var beforeData = await ReadPropertyDataCountsAsync(property.Id);
+        var before = DateTimeOffset.UtcNow;
+        var submissionKey = Guid.NewGuid();
+        var unitReportResponse = await staff.PostAsJsonAsync($"/api/properties/{property.Id}/feedback-reports", new
+        {
+            unitId = unit.Id,
+            note = "The 6B corridor light needs attention.",
+            submissionKey,
+        });
+        Assert.Equal(HttpStatusCode.Created, unitReportResponse.StatusCode);
+        var unitReport = await ReadAsync<FeedbackResponse>(unitReportResponse);
+        var after = DateTimeOffset.UtcNow;
+        Assert.Equal(property.Id, unitReport.PropertyId);
+        Assert.Equal(unit.Id, unitReport.UnitId);
+        Assert.Equal("6B", unitReport.UnitName);
+        Assert.Equal(RoomMeterIssueTarget.Unit, unitReport.Target);
+        Assert.Null(unitReport.IssueType);
+        Assert.Null(unitReport.ObservedDate);
+        Assert.InRange(unitReport.CreatedAtUtc, before, after);
+        Assert.Equal(DateOnly.FromDateTime(unitReport.CreatedAtUtc.ToOffset(TimeSpan.FromHours(6)).DateTime), DateOnly.FromDateTime(DateTime.UtcNow.AddHours(6)));
+
+        var duplicate = await ReadAsync<FeedbackResponse>(await staff.PostAsJsonAsync($"/api/properties/{property.Id}/feedback-reports", new
+        {
+            unitId = unit.Id,
+            note = "The 6B corridor light needs attention.",
+            submissionKey,
+        }));
+        Assert.Equal(unitReport.Id, duplicate.Id);
+
+        var commonArea = await ReadAsync<FeedbackResponse>(await staff.PostAsJsonAsync($"/api/properties/{property.Id}/feedback-reports", new
+        {
+            unitId = (Guid?)null,
+            note = "The shared entrance needs cleaning.",
+            submissionKey = Guid.NewGuid(),
+        }));
+        Assert.Null(commonArea.UnitId);
+        Assert.Equal("Building/Common Area", commonArea.UnitName);
+        Assert.Equal(RoomMeterIssueTarget.BuildingCommonArea, commonArea.Target);
+        Assert.Null(commonArea.IssueType);
+        Assert.Null(commonArea.ObservedDate);
+
+        var afterData = await ReadPropertyDataCountsAsync(property.Id);
+        Assert.Equal(beforeData, afterData);
+
+        var adminNotifications = await ReadAsync<List<NotificationResponse>>(await admin.GetAsync("/api/notifications"));
+        var managerNotifications = await ReadAsync<List<NotificationResponse>>(await manager.GetAsync("/api/notifications"));
+        Assert.Equal(2, adminNotifications.Count);
+        Assert.Equal(2, managerNotifications.Count);
+        var adminUnitNotification = Assert.Single(adminNotifications, item => item.RoomMeterIssueId == unitReport.Id);
+        var managerUnitNotification = Assert.Single(managerNotifications, item => item.RoomMeterIssueId == unitReport.Id);
+        Assert.Equal("New report · Room 6B", adminUnitNotification.Title);
+        Assert.False(adminUnitNotification.IsRead);
+        Assert.False(managerUnitNotification.IsRead);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PostAsync($"/api/notifications/{adminUnitNotification.Id}/read", null)).StatusCode);
+        var adminRead = Assert.Single((await ReadAsync<List<NotificationResponse>>(await admin.GetAsync("/api/notifications"))), item => item.Id == adminUnitNotification.Id);
+        var managerUnread = Assert.Single((await ReadAsync<List<NotificationResponse>>(await manager.GetAsync("/api/notifications"))), item => item.Id == managerUnitNotification.Id);
+        Assert.True(adminRead.IsRead);
+        Assert.False(managerUnread.IsRead);
+
+        var staffReports = await ReadAsync<List<FeedbackResponse>>(await staff.GetAsync($"/api/properties/{property.Id}/room-meter-issues"));
+        Assert.Equal(2, staffReports.Count);
+        Assert.All(staffReports, item => Assert.Equal(RoomMeterIssueStatus.Open, item.Status));
+        var acknowledged = await ReadAsync<FeedbackResponse>(await manager.PostAsJsonAsync($"/api/room-meter-issues/{unitReport.Id}/acknowledge", new { expectedVersion = unitReport.Version, reason = "Reviewer notified." }));
+        Assert.Equal(RoomMeterIssueStatus.Acknowledged, acknowledged.Status);
+        Assert.Equal(2, acknowledged.Audit.Count);
+        var resolved = await ReadAsync<FeedbackResponse>(await manager.PostAsJsonAsync($"/api/room-meter-issues/{unitReport.Id}/resolve", new { expectedVersion = acknowledged.Version, reason = "Light replacement scheduled." }));
+        Assert.Equal(RoomMeterIssueStatus.Resolved, resolved.Status);
+        Assert.Equal(3, resolved.Audit.Count);
+        var staffUpdated = Assert.Single(await ReadAsync<List<FeedbackResponse>>(await staff.GetAsync($"/api/properties/{property.Id}/room-meter-issues")), item => item.Id == unitReport.Id);
+        Assert.Equal(RoomMeterIssueStatus.Resolved, staffUpdated.Status);
+        Assert.Equal(3, staffUpdated.Audit.Count);
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await finance.GetAsync("/api/notifications")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await unassignedReviewer.GetAsync($"/api/properties/{property.Id}/room-meter-issues")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await unassignedReviewer.PostAsJsonAsync($"/api/properties/{property.Id}/feedback-reports", new { unitId = unit.Id, note = "Not assigned", submissionKey = Guid.NewGuid() })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/role-permissions", new
+        {
+            role = "Manager",
+            permissions = new Dictionary<string, bool> { ["ReviewRoomMeterIssues"] = false },
+            reason = "Revoke disposable reviewer access",
+        })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await manager.GetAsync("/api/notifications")).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/api/properties/{property.Id}/staff/{staffUser.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await staff.GetAsync($"/api/properties/{property.Id}/room-meter-issues")).StatusCode);
+        var adminReports = await ReadAsync<List<FeedbackResponse>>(await admin.GetAsync($"/api/properties/{property.Id}/room-meter-issues"));
+        Assert.Equal(2, adminReports.Count);
     }
 
     [PostgresFact]
@@ -956,6 +1096,22 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         return (await response.Content.ReadFromJsonAsync<T>(JsonOptions))!;
     }
 
+    private async Task<PropertyDataCounts> ReadPropertyDataCountsAsync(Guid propertyId)
+    {
+        await using var connection = await database.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand("""
+            SELECT
+                (SELECT COUNT(*) FROM "billing_cycles" WHERE "PropertyId" = @property),
+                (SELECT COUNT(*) FROM "billing_unit_bills" bill JOIN "billing_cycles" cycle ON cycle."Id" = bill."BillingCycleId" WHERE cycle."PropertyId" = @property),
+                (SELECT COUNT(*) FROM "billing_charge_lines" line JOIN "billing_unit_bills" bill ON bill."Id" = line."BillingUnitBillId" JOIN "billing_cycles" cycle ON cycle."Id" = bill."BillingCycleId" WHERE cycle."PropertyId" = @property),
+                (SELECT COUNT(*) FROM "collection_reports" report JOIN "billing_unit_bills" bill ON bill."Id" = report."BillingUnitBillId" JOIN "billing_cycles" cycle ON cycle."Id" = bill."BillingCycleId" WHERE cycle."PropertyId" = @property)
+            """, connection);
+        command.Parameters.AddWithValue("property", propertyId);
+        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow);
+        Assert.True(await reader.ReadAsync());
+        return new PropertyDataCounts(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
+    }
+
     private static async Task<(int Precision, int Scale)> NumericDefinitionAsync(NpgsqlConnection connection, string table, string column)
     {
         await using var command = new NpgsqlCommand("SELECT numeric_precision, numeric_scale FROM information_schema.columns WHERE table_schema = 'public' AND table_name = @table AND column_name = @column", connection);
@@ -1016,6 +1172,12 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
 
     private sealed record CollectionQueueResponse(List<CollectionReportResponse> Items, decimal BilledTotal, decimal PendingReportedTotal, decimal ConfirmedCollectedTotal, decimal OutstandingTotal);
 
+    private sealed record FeedbackResponse(Guid Id, Guid PropertyId, Guid? UnitId, string UnitName, string? FloorName, Guid ReporterUserId, string ReporterName, RoomMeterIssueType? IssueType, string Description, DateOnly? ObservedDate, DateTimeOffset CreatedAtUtc, RoomMeterIssueStatus Status, long Version, string? ResolutionReason, List<RoomMeterIssueAuditResponse> Audit, RoomMeterIssueTarget Target, bool IsFeedback);
+
+    private sealed record RoomMeterIssueAuditResponse(Guid Id, Guid ActorUserId, RoomMeterIssueAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
+
+    private sealed record NotificationResponse(Guid Id, Guid RoomMeterIssueId, Guid PropertyId, Guid? UnitId, string Title, string PropertyName, string UnitLabel, string TimeZoneId, DateTimeOffset CreatedAtUtc, DateTimeOffset? ReadAtUtc, bool IsRead);
+
     private sealed record BillingStatementResponse(string StatementType, Guid PropertyId, Guid BillingCycleId, string PropertyName, string PropertyAddress, DateOnly BillingMonth, DateTimeOffset ApprovalDate, decimal ApprovedTotal, Guid? TenantId, List<BillingStatementUnitResponse> Bills);
 
     private sealed record BillingStatementUnitResponse(string BillReference, Guid BillId, Guid UnitId, string UnitName, string? FloorName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, DateOnly? OccupancyStartDate, DateOnly? OccupancyEndDate, decimal Total, List<BillingStatementChargeResponse> Charges);
@@ -1031,4 +1193,5 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
     private sealed record ComparisonConsumptionResponse(decimal? CurrentUnits, decimal? PreviousUnits, decimal? Difference, decimal? PercentageChange, bool PercentageChangeAvailable, int CurrentUnitCount, int PreviousUnitCount, bool CoverageChanged);
 
     private sealed record ComparisonMetricResponse(string Key, ChargeType? ChargeType, string Label, decimal? CurrentAmount, decimal? PreviousAmount, decimal? Difference, decimal? PercentageChange, bool PercentageChangeAvailable, int CurrentUnitCount, int PreviousUnitCount, bool CoverageChanged);
+    private sealed record PropertyDataCounts(long BillingCycles, long BillingUnitBills, long BillingChargeLines, long CollectionReports);
 }

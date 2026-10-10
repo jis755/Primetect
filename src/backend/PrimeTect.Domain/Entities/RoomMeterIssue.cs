@@ -43,7 +43,8 @@ public sealed class RoomMeterIssue
         Guid propertyId,
         Guid? unitId,
         Guid reporterUserId,
-        string description)
+        string description,
+        Guid submissionKey)
     {
         if (string.IsNullOrWhiteSpace(description))
         {
@@ -53,6 +54,11 @@ public sealed class RoomMeterIssue
         if (description.Trim().Length > 2000)
         {
             throw new ArgumentException("The feedback or complaint note cannot exceed 2000 characters.", nameof(description));
+        }
+
+        if (submissionKey == Guid.Empty)
+        {
+            throw new ArgumentException("A feedback submission key is required.", nameof(submissionKey));
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -67,6 +73,7 @@ public sealed class RoomMeterIssue
             Description = description.Trim(),
             ObservedDate = null,
             Target = unitId.HasValue ? RoomMeterIssueTarget.Unit : RoomMeterIssueTarget.BuildingCommonArea,
+            SubmissionKey = submissionKey,
             Status = RoomMeterIssueStatus.Open,
             Version = 1,
             CreatedAtUtc = now,
@@ -85,6 +92,7 @@ public sealed class RoomMeterIssue
     public DateOnly? ObservedDate { get; private set; }
 
     public RoomMeterIssueTarget Target { get; private set; }
+    public Guid? SubmissionKey { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public RoomMeterIssueStatus Status { get; private set; }
     public long Version { get; private set; }

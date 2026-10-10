@@ -1201,6 +1201,8 @@ function RoomMeterIssueReporter({ properties = [], property, selectedPropertyId,
   const [showReports, setShowReports] = useState(Boolean(openRequest));
   const [target, setTarget] = useState(lockedUnitId ?? "");
   const [note, setNote] = useState("");
+  const [submissionKey, setSubmissionKey] = useState("");
+  const [submissionNote, setSubmissionNote] = useState("");
   const [reports, setReports] = useState<RoomMeterIssue[]>([]);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState("");
@@ -1262,8 +1264,15 @@ function RoomMeterIssueReporter({ properties = [], property, selectedPropertyId,
     setBusy(true);
     setLocalError("");
     try {
-      await apiFetch(`/api/properties/${selectedProperty.id}/feedback-reports`, { method: "POST", body: JSON.stringify({ unitId: isLockedToUnit ? effectiveLockedUnitId : target === "__common__" ? null : target, note: note.trim() }) });
+      const retryKey = submissionKey || globalThis.crypto.randomUUID();
+      if (!submissionKey) {
+        setSubmissionKey(retryKey);
+        setSubmissionNote(note.trim());
+      }
+      await apiFetch(`/api/properties/${selectedProperty.id}/feedback-reports`, { method: "POST", body: JSON.stringify({ unitId: isLockedToUnit ? effectiveLockedUnitId : target === "__common__" ? null : target, note: note.trim(), submissionKey: retryKey }) });
       setNote("");
+      setSubmissionKey("");
+      setSubmissionNote("");
       setShowReports(true);
       onMessage(text("Report sent. No reading, bill, or collection was changed.", "রিপোর্ট পাঠানো হয়েছে। কোনো রিডিং, বিল বা পাওয়ার রিপোর্ট বদলায়নি।"));
       await loadReports();
@@ -1298,7 +1307,7 @@ function RoomMeterIssueReporter({ properties = [], property, selectedPropertyId,
     {open && canReport && <form onSubmit={submit} className="mt-4 grid gap-3 rounded-2xl border border-sun/40 bg-sun/10 p-4">
       {availableProperties.length > 1 && !property ? <label className="text-sm font-bold text-ink">{text("Property", "সম্পত্তি")}<select value={propertyId} onChange={(event) => setPropertyId(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal">{availableProperties.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label> : <p className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-ink">{text("Property", "সম্পত্তি")}: {selectedProperty?.name ?? text("No authorized property", "কোনো অনুমোদিত সম্পত্তি নেই")}</p>}
        {isLockedToUnit ? <p className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-ink">{text("Unit", "ইউনিট")}: {selectedUnit?.name ?? text("Unit unavailable", "ইউনিটের তথ্য নেই")} <span className="font-normal text-ink/50">· {text("selected from this room", "এই রুম থেকে নির্বাচিত")}</span></p> : <label className="text-sm font-bold text-ink">{text("Location", "স্থান")}<select value={target} onChange={(event) => setTarget(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-ink/10 bg-white px-3 py-2 text-sm font-normal"><option value="">{text("Choose a unit or Building/Common Area", "ইউনিট বা বিল্ডিং/সাধারণ এলাকা বেছে নিন")}</option><option value="__common__">{text("Building/Common Area", "বিল্ডিং/সাধারণ এলাকা")}</option>{units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name} · {unit.floorName}</option>)}</select></label>}
-      <label className="text-sm font-bold text-ink">{text("Feedback or complaint note", "ফিডব্যাক বা অভিযোগের নোট")}<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={4} maxLength={2000} className="mt-1 block w-full rounded-lg border border-ink/10 bg-white px-3 py-3 text-base font-normal" placeholder={text("Write what you want the reviewer to know", "পর্যালোচককে যা জানাতে চান লিখুন")} required /></label>
+      <label className="text-sm font-bold text-ink">{text("Feedback or complaint note", "ফিডব্যাক বা অভিযোগের নোট")}<textarea value={note} onChange={(event) => { const value = event.target.value; if (submissionKey && value.trim() !== submissionNote) setSubmissionKey(""); setNote(value); }} rows={4} maxLength={2000} className="mt-1 block w-full rounded-lg border border-ink/10 bg-white px-3 py-3 text-base font-normal" placeholder={text("Write what you want the reviewer to know", "পর্যালোচককে যা জানাতে চান লিখুন")} required /></label>
       <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy || !selectedProperty} className="min-h-12 rounded-xl bg-pine px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{busy ? text("Sending…", "পাঠানো হচ্ছে…") : text("Send Report", "রিপোর্ট পাঠান")}</button>{onClose && <button type="button" onClick={() => { setOpen(false); onClose(); }} className="min-h-12 rounded-xl border border-ink/15 px-4 py-3 text-sm font-bold text-ink">{text("Cancel", "বাতিল")}</button>}</div>
     </form>}
     {open && !canReport && <p className="mt-4 rounded-xl border border-dashed border-ink/15 p-4 text-sm text-ink/60">{text("You can view reports but cannot send a new one.", "আপনি রিপোর্ট দেখতে পারবেন, কিন্তু নতুন রিপোর্ট পাঠাতে পারবেন না।")}</p>}

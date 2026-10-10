@@ -163,7 +163,7 @@ Manual review checklist:
 The current checkpoint also has a new isolated synthetic demo database:
 `primetect_demo_guided_20261010_da3c89c`. It is separate from both `primetect` and the earlier collection demo. The
 currently running copy has the first seven migrations applied; `RoomMeterIssues` remains unapplied there. Use a new
-disposable database for the complete nine-migration issue/feedback workflow. It contains unequal Ground/Upper floors,
+disposable database for the complete ten-migration issue/feedback workflow. It contains unequal Ground/Upper floors,
 mixed fixed and metered charges, inherited/custom/disabled examples, a named tenant occupying multiple units, an
 unnamed occupancy, two consecutive approved billing months (September and October 2026), and one pending cash
 collection report.
@@ -361,7 +361,7 @@ Run these commands one at a time to limit memory use. The normal API workflow te
 
 ### Disposable PostgreSQL verification
 
-The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all nine committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
+The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all ten committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
 
 PowerShell example (use a local password only; do not put this value in a tracked file):
 
@@ -424,6 +424,77 @@ identifies the unit when applicable (for example, **New report · Room 6B**),
 and opening it marks it read without resolving the report. No email or SMS
 delivery is claimed.
 
+### Fresh feedback and notification demo
+
+A new isolated synthetic demo was prepared for the Feedback / Report and
+recipient-scoped notification workflows:
+
+- Database: `primetect_demo_feedback_20261011_9a72c4e1`
+- API: `http://127.0.0.1:5013`
+- Frontend: `http://127.0.0.1:3013`
+- Migrations: all ten current migrations, including
+  `FeedbackReportsAndNotifications` and `FeedbackSubmissionIdempotency`, were
+  applied from an empty database to this new database only.
+- Local configuration: `src/backend/PrimeTect.Api/appsettings.FeedbackDemo.Local.json`
+- Local credentials: `src/backend/PrimeTect.Api/feedback-demo.credentials.secret.json`
+
+Both local files are ignored. The credentials file contains separate Admin,
+Admin reviewer, Manager, Staff, and Finance accounts; passwords are never
+stored in tracked files or printed in this documentation. The Finance account
+is assigned only to the second property and is not granted room-feedback
+review permission.
+
+The demo contains properties with different assignments, rooms 2A and 6B, a
+named tenant occupying multiple units, an unnamed tenant, a saved Draft meter
+cycle, an Approved fixed-charge cycle, unit and Building/Common Area feedback,
+recipient-specific read/unread notification copies, and acknowledged/resolved
+feedback examples. The seed was performed through the existing HTTP APIs.
+
+To start the API without copying a password into a tracked file, derive its
+connection string in memory from the existing ignored GuidedDemo configuration
+and target only the named demo database:
+
+```powershell
+$demo = Get-Content src/backend/PrimeTect.Api/appsettings.FeedbackDemo.Local.json | ConvertFrom-Json
+$source = (Get-Content src/backend/PrimeTect.Api/appsettings.GuidedDemo.json | ConvertFrom-Json).ConnectionStrings.PrimeTectDatabase
+$target = $source -replace '(?i)(Database|Initial Catalog)\s*=\s*[^;]+', "Database=$($demo.database)"
+$env:ASPNETCORE_ENVIRONMENT = "Demo"
+$env:Database__Provider = "PostgreSQL"
+$env:ConnectionStrings__PrimeTectDatabase = $target
+$env:AllowedOrigins__0 = $demo.frontendUrl
+dotnet run --project src/backend/PrimeTect.Api --no-build --urls $demo.apiBaseUrl
+```
+
+In a second terminal, start the matching frontend:
+
+```powershell
+$demo = Get-Content src/backend/PrimeTect.Api/appsettings.FeedbackDemo.Local.json | ConvertFrom-Json
+Set-Location src/frontend
+$env:NEXT_PUBLIC_API_BASE_URL = $demo.apiBaseUrl
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3013
+```
+
+The prepared pair is currently running. Shut down only the confirmed PrimeTect
+API/frontend process IDs for this pair; do not stop unrelated listeners. The
+local `primetect` database was not used or changed, and its migration status
+remains **unknown**.
+
+Manual feedback/notification checklist:
+
+1. Sign in as Staff, select the Feedback / Report action from room 6B, confirm
+   the property and room are read-only, enter only a note, send it, and open
+   **View My Reports**.
+2. Sign in as Manager or Admin, open the bell, confirm the notification says
+   **New report - Room 6B**, then read it. Confirm only that recipient's copy
+   becomes read and reading it does not acknowledge or resolve the report.
+3. Acknowledge one report and resolve the common-area report with an authorized
+   reviewer; confirm the submitter sees the updated status and audit history.
+4. From the home report action, choose **Building/Common Area** and send a note;
+   confirm it has no unit assignment. Check loading and failed-save messages.
+
+Browser automation was unavailable during this verification, so desktop,
+mobile-width, and Bangla visual checks remain pending.
+
 Meter and collection screens include a property/month **View all rooms** overview. Every accessible enabled unit appears once; fixed-charge-only units are marked Not applicable and are not counted as missing. Reading filters distinguish missing, saved draft, awaiting review, returned, approved, and reported issues. Collection rows distinguish no approved bill, pending reports, confirmed collections, pending reversals, and confirmed outstanding balances; historical occupancy references are not transferred.
 
 ### Meter reading month convention
@@ -432,7 +503,7 @@ The selected billing month is the month in which the bill is issued. Meter consu
 
 Electricity amount is rounded to two decimal places using the existing away-from-zero money rule. A low-bill warning is informational only and appears strictly below the effective threshold; the initial default is Tk200, so Tk199 warns while Tk200 does not. It never adds a minimum fee and does not block approval.
 
-The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, `RoomMeterIssues`, and `FeedbackReportsAndNotifications` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
+The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, `RoomMeterIssues`, `FeedbackReportsAndNotifications`, and `FeedbackSubmissionIdempotency` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
 
 ### Simplified workspace navigation
 

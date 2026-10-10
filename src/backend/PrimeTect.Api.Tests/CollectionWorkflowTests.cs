@@ -280,6 +280,7 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
         {
             unitId = unit.Id,
             note = "The light near the room needs attention.",
+            submissionKey = Guid.NewGuid(),
         }));
         Assert.Equal(unit.Id, unitReport.UnitId);
         Assert.Equal(RoomMeterIssueTarget.Unit, unitReport.Target);
@@ -293,6 +294,7 @@ public sealed class CollectionWorkflowTests : IClassFixture<PrimeTectApiFactory>
         {
             unitId = (Guid?)null,
             note = "The entrance needs cleaning.",
+            submissionKey = Guid.NewGuid(),
         }));
         Assert.Null(commonAreaReport.UnitId);
         Assert.Equal(RoomMeterIssueTarget.BuildingCommonArea, commonAreaReport.Target);

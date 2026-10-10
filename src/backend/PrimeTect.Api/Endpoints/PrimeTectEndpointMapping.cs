@@ -2479,10 +2479,40 @@ public static class PrimeTectEndpointMapping
             }
         }
 
+        if (request.SubmissionKey == Guid.Empty)
+        {
+            return BadRequest("A feedback submission key is required. Retry from the report form.");
+        }
+
+        var existing = await db.RoomMeterIssues.FirstOrDefaultAsync(item =>
+            item.OrganizationId == actor.OrganizationId
+            && item.ReporterUserId == actor.UserId
+            && item.SubmissionKey == request.SubmissionKey,
+            cancellationToken);
+        if (existing is not null)
+        {
+            if (existing.PropertyId != propertyId
+                || existing.UnitId != request.UnitId
+                || !string.Equals(existing.Description, request.Note?.Trim(), StringComparison.Ordinal)
+                || existing.IssueType is not null)
+            {
+                return Results.Conflict(new { message = "This feedback retry key is already linked to a different report." });
+            }
+
+            try
+            {
+                return Results.Ok(await ToRoomMeterIssueResponseAsync(db, existing, cancellationToken));
+            }
+            catch (Exception exception) when (IsMissingRoomMeterIssueStorage(exception))
+            {
+                return RoomMeterIssueStorageUnavailable();
+            }
+        }
+
         RoomMeterIssue issue;
         try
         {
-            issue = RoomMeterIssue.CreateFeedback(actor.OrganizationId, propertyId, unit?.Id, actor.UserId, request.Note);
+            issue = RoomMeterIssue.CreateFeedback(actor.OrganizationId, propertyId, unit?.Id, actor.UserId, request.Note, request.SubmissionKey);
         }
         catch (ArgumentException exception)
         {

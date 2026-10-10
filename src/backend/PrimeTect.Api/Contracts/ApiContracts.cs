@@ -192,7 +192,7 @@ public sealed record RoomMeterIssueResponse(
     RoomMeterIssueTarget Target,
     bool IsFeedback);
 
-public sealed record FeedbackReportCreateRequest(Guid? UnitId, string Note);
+public sealed record FeedbackReportCreateRequest(Guid? UnitId, string Note, Guid SubmissionKey);
 
 public sealed record NotificationResponse(
     Guid Id,
