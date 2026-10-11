@@ -97,6 +97,15 @@ public static class PrimeTectEndpointMapping
         secure.MapPost("/collection-reversals/{reversalId:guid}/approve", (Delegate)ApproveCollectionReversalAsync);
         secure.MapGet("/role-permissions", (Delegate)GetRolePermissionsAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPut("/role-permissions", (Delegate)UpdateRolePermissionsAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapGet("/properties/{propertyId:guid}/meter-setup", (Delegate)GetMeterSetupAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/utility-accounts", (Delegate)CreateUtilityAccountAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/utility-accounts/{accountId:guid}", (Delegate)UpdateUtilityAccountAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/utility-main-meters", (Delegate)CreateUtilityMainMeterAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/utility-main-meters/{mainMeterId:guid}", (Delegate)UpdateUtilityMainMeterAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/utility-main-meters/{mainMeterId:guid}/end", (Delegate)EndUtilityMainMeterAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/meter-installations", (Delegate)CreateMeterInstallationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPut("/properties/{propertyId:guid}/meter-installations/{installationId:guid}", (Delegate)UpdateMeterInstallationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/properties/{propertyId:guid}/meter-installations/{installationId:guid}/replace", (Delegate)ReplaceMeterInstallationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
     }
 
     private static async Task<IResult> RegisterOwnerAsync(
@@ -974,6 +983,11 @@ public static class PrimeTectEndpointMapping
             suggestion.ProviderVersion,
             suggestion.SuggestedReading,
             suggestion.Confidence);
+        var activeInstallationId = await db.MeterInstallations.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.UnitId == bill.UnitId && item.EndedOn == null)
+            .Select(item => (Guid?)item.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        photo.AssociateInstallation(activeInstallationId);
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         try
@@ -1021,6 +1035,655 @@ public static class PrimeTectEndpointMapping
             : Results.File(stream, photo.ContentType, enableRangeProcessing: false);
     }
 
+    // ----- Utility accounts, shared main meters, and room submeter installations -----
+
+    private static async Task<IResult> GetMeterSetupAsync(Guid propertyId, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (await db.Properties.AsNoTracking().FirstOrDefaultAsync(item => item.Id == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        var accounts = await db.UtilityAccounts.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+            .OrderBy(item => item.ProviderName).ToListAsync(cancellationToken);
+        var mainMeters = await db.UtilityMainMeters.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+            .OrderBy(item => item.MeterNumber).ToListAsync(cancellationToken);
+        var installations = await db.MeterInstallations.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+            .OrderBy(item => item.CreatedAtUtc).ToListAsync(cancellationToken);
+        var unitNames = await db.Units.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+            .ToDictionaryAsync(item => item.Id, item => item.Name, cancellationToken);
+        var audit = await db.MeterInstallationAuditEntries.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId)
+            .OrderBy(item => item.OccurredAtUtc).ToListAsync(cancellationToken);
+
+        return Results.Ok(new MeterSetupResponse(
+            propertyId,
+            accounts.Select(ToUtilityAccountResponse).ToList(),
+            mainMeters.Select(ToUtilityMainMeterResponse).ToList(),
+            installations.Select(item => ToMeterInstallationResponse(item, unitNames.GetValueOrDefault(item.UnitId))).ToList(),
+            audit.Select(ToMeterInstallationAuditResponse).ToList()));
+    }
+
+    private static UtilityAccountResponse ToUtilityAccountResponse(UtilityAccount account) =>
+        new(account.Id, account.PropertyId, account.ProviderName, account.CustomerNumber, account.DisplayLabel, account.CreatedAtUtc);
+
+    private static UtilityMainMeterResponse ToUtilityMainMeterResponse(UtilityMainMeter meter) =>
+        new(meter.Id, meter.PropertyId, meter.UtilityAccountId, meter.MeterNumber, meter.DisplayLabel, meter.InstalledOn, meter.EndedOn, meter.IsActive);
+
+    private static MeterInstallationResponse ToMeterInstallationResponse(MeterInstallation installation, string? unitName) =>
+        new(installation.Id, installation.PropertyId, installation.UnitId, string.IsNullOrWhiteSpace(unitName) ? "Unit" : unitName, installation.MainMeterId, installation.SerialNumber, installation.DisplayLabel,
+            installation.InstallationDate, installation.OpeningReading, installation.OpeningReadingDate, installation.ReplacedInstallationId, installation.IdentityKnown,
+            installation.EndedOn, installation.EndReason, installation.FinalReading, installation.FinalReadingUnavailable, installation.IsActive, installation.Version, installation.CreatedAtUtc);
+
+    private static MeterInstallationAuditResponse ToMeterInstallationAuditResponse(MeterInstallationAuditEntry audit) =>
+        new(audit.Id, audit.InstallationId, audit.PreviousInstallationId, audit.ActorUserId, audit.Action, audit.ReplacementDate, audit.OccurredAtUtc, audit.Reason, audit.BeforeJson, audit.AfterJson);
+
+    private static async Task<IResult> CreateUtilityAccountAsync(Guid propertyId, UtilityAccountRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ProviderName))
+        {
+            return BadRequest("A provider name is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.CustomerNumber))
+        {
+            return BadRequest("A customer or account number is required.");
+        }
+
+        if (await db.Properties.AsNoTracking().FirstOrDefaultAsync(item => item.Id == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken) is null)
+        {
+            return Results.NotFound();
+        }
+
+        var account = new UtilityAccount(actor.OrganizationId, propertyId, request.ProviderName, request.CustomerNumber, request.DisplayLabel, actor.UserId);
+        db.UtilityAccounts.Add(account);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Created($"/api/properties/{propertyId}/utility-accounts/{account.Id}", ToUtilityAccountResponse(account));
+    }
+
+    private static async Task<IResult> UpdateUtilityAccountAsync(Guid propertyId, Guid accountId, UtilityAccountRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ProviderName) || string.IsNullOrWhiteSpace(request.CustomerNumber))
+        {
+            return BadRequest("Provider name and customer number are required.");
+        }
+
+        var account = await db.UtilityAccounts.FirstOrDefaultAsync(item => item.Id == accountId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (account is null)
+        {
+            return Results.NotFound();
+        }
+
+        account.Update(request.ProviderName, request.CustomerNumber, request.DisplayLabel);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Ok(ToUtilityAccountResponse(account));
+    }
+
+    private static async Task<IResult> CreateUtilityMainMeterAsync(Guid propertyId, UtilityMainMeterRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.MeterNumber))
+        {
+            return BadRequest("A meter number is required.");
+        }
+
+        if (await db.UtilityAccounts.AsNoTracking().FirstOrDefaultAsync(item => item.Id == request.UtilityAccountId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken) is null)
+        {
+            return BadRequest("The selected utility account does not belong to this property.");
+        }
+
+        var meter = new UtilityMainMeter(actor.OrganizationId, propertyId, request.UtilityAccountId, request.MeterNumber, request.DisplayLabel, request.InstalledOn, actor.UserId);
+        db.UtilityMainMeters.Add(meter);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Created($"/api/properties/{propertyId}/utility-main-meters/{meter.Id}", ToUtilityMainMeterResponse(meter));
+    }
+
+    private static async Task<IResult> UpdateUtilityMainMeterAsync(Guid propertyId, Guid mainMeterId, UtilityMainMeterRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var meter = await db.UtilityMainMeters.FirstOrDefaultAsync(item => item.Id == mainMeterId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (meter is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.MeterNumber))
+        {
+            return BadRequest("A meter number is required.");
+        }
+
+        if (await db.UtilityAccounts.AsNoTracking().FirstOrDefaultAsync(item => item.Id == request.UtilityAccountId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken) is null)
+        {
+            return BadRequest("The selected utility account does not belong to this property.");
+        }
+
+        meter.Update(request.UtilityAccountId, request.MeterNumber, request.DisplayLabel, request.InstalledOn);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Ok(ToUtilityMainMeterResponse(meter));
+    }
+
+    private static async Task<IResult> EndUtilityMainMeterAsync(Guid propertyId, Guid mainMeterId, UtilityMainMeterEndRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var meter = await db.UtilityMainMeters.FirstOrDefaultAsync(item => item.Id == mainMeterId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (meter is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (meter.InstalledOn is { } installed && request.EndedOn < installed)
+        {
+            return BadRequest("The end date cannot precede the installation date.");
+        }
+
+        meter.End(request.EndedOn);
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Ok(ToUtilityMainMeterResponse(meter));
+    }
+
+    private static async Task<IResult> CreateMeterInstallationAsync(Guid propertyId, MeterInstallationRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var unit = await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == request.UnitId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (unit is null)
+        {
+            return BadRequest("Select a unit in this property.");
+        }
+
+        if (request.MainMeterId is not null
+            && await db.UtilityMainMeters.AsNoTracking().FirstOrDefaultAsync(item => item.Id == request.MainMeterId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken) is null)
+        {
+            return BadRequest("The selected main meter does not belong to this property.");
+        }
+
+        if (request.OpeningReading is < 0m)
+        {
+            return BadRequest("The opening reading cannot be negative.");
+        }
+
+        if (await db.MeterInstallations.AnyAsync(item => item.OrganizationId == actor.OrganizationId && item.UnitId == request.UnitId && item.EndedOn == null, cancellationToken))
+        {
+            return Results.Conflict(new { message = "This room already has an active submeter. Use Replace meter to change it." });
+        }
+
+        var identityKnown = request.IdentityKnown ?? (!string.IsNullOrWhiteSpace(request.SerialNumber) || request.InstallationDate is not null);
+        var installation = new MeterInstallation(actor.OrganizationId, propertyId, request.UnitId, request.MainMeterId, request.SerialNumber, request.DisplayLabel,
+            request.InstallationDate, request.OpeningReading, request.OpeningReadingDate, null, identityKnown, actor.UserId);
+        var action = identityKnown ? MeterInstallationAuditAction.Installed : MeterInstallationAuditAction.Adopted;
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            db.MeterInstallations.Add(installation);
+            db.MeterInstallationAuditEntries.Add(new MeterInstallationAuditEntry(actor.OrganizationId, propertyId, request.UnitId, installation.Id, null, actor.UserId, action, null, request.Reason, null, JsonSerializer.Serialize(new { installation.Id, installation.UnitId, installation.IdentityKnown }), Guid.NewGuid()));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Created($"/api/properties/{propertyId}/meter-installations/{installation.Id}", ToMeterInstallationResponse(installation, unit.Name));
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This room already has an active submeter. Refresh before continuing." });
+        }
+    }
+
+    private static async Task<IResult> UpdateMeterInstallationAsync(Guid propertyId, Guid installationId, MeterInstallationUpdateRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var installation = await db.MeterInstallations.FirstOrDefaultAsync(item => item.Id == installationId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (installation is null)
+        {
+            return Results.NotFound();
+        }
+
+        if (request.MainMeterId is not null
+            && await db.UtilityMainMeters.AsNoTracking().FirstOrDefaultAsync(item => item.Id == request.MainMeterId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken) is null)
+        {
+            return BadRequest("The selected main meter does not belong to this property.");
+        }
+
+        var identityKnown = request.IdentityKnown ?? (!string.IsNullOrWhiteSpace(request.SerialNumber) || request.InstallationDate is not null);
+        var before = JsonSerializer.Serialize(new { installation.MainMeterId, installation.SerialNumber, installation.DisplayLabel, installation.InstallationDate, installation.IdentityKnown });
+        installation.UpdateIdentity(request.MainMeterId, request.SerialNumber, request.DisplayLabel, request.InstallationDate, identityKnown);
+        db.MeterInstallationAuditEntries.Add(new MeterInstallationAuditEntry(actor.OrganizationId, propertyId, installation.UnitId, installation.Id, null, actor.UserId,
+            MeterInstallationAuditAction.Adopted, null, request.Reason, before, JsonSerializer.Serialize(new { installation.MainMeterId, installation.SerialNumber, installation.DisplayLabel, installation.InstallationDate, installation.IdentityKnown }), Guid.NewGuid()));
+        await db.SaveChangesAsync(cancellationToken);
+        return Results.Ok(ToMeterInstallationResponse(installation, null));
+    }
+
+    private static async Task<IResult> ReplaceMeterInstallationAsync(Guid propertyId, Guid installationId, MeterReplacementRequest request, HttpContext httpContext, PropertyManagementDbContext db, CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        var property = await db.Properties.AsNoTracking().FirstOrDefaultAsync(item => item.Id == propertyId && item.OrganizationId == actor.OrganizationId, cancellationToken);
+        if (property is null)
+        {
+            return Results.NotFound();
+        }
+
+        var existingAudit = await db.MeterInstallationAuditEntries.AsNoTracking().FirstOrDefaultAsync(item => item.OrganizationId == actor.OrganizationId && item.SubmissionKey == request.SubmissionKey, cancellationToken);
+        if (existingAudit is not null)
+        {
+            var existingNew = await db.MeterInstallations.AsNoTracking().FirstOrDefaultAsync(item => item.Id == existingAudit.InstallationId, cancellationToken);
+            var existingUnit = existingNew is null ? null : await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == existingNew.UnitId, cancellationToken);
+            return existingNew is null
+                ? Results.Conflict(new { message = "This replacement request was already recorded." })
+                : Results.Ok(new MeterReplacementResponse(existingAudit.PreviousInstallationId ?? Guid.Empty, ToMeterInstallationResponse(existingNew, existingUnit?.Name), existingAudit.OccurredAtUtc, existingAudit.ReplacementDate?.ToString("yyyy-MM-dd") ?? string.Empty, false, null));
+        }
+
+        var active = await db.MeterInstallations.FirstOrDefaultAsync(item => item.Id == installationId && item.PropertyId == propertyId && item.OrganizationId == actor.OrganizationId && item.EndedOn == null, cancellationToken);
+        if (active is null)
+        {
+            return Results.Conflict(new { message = "This submeter is no longer the active meter for the room. Refresh before replacing it." });
+        }
+
+        if (active.Version != request.ExpectedInstallationVersion)
+        {
+            return Results.Conflict(new { message = "This submeter changed since it was loaded. Refresh before replacing it." });
+        }
+
+        if (request.NewOpeningReading < 0m)
+        {
+            return BadRequest("The new meter's opening reading cannot be negative.");
+        }
+
+        if (request.OldFinalReadingUnavailable && request.OldFinalReading is not null)
+        {
+            return BadRequest("Provide a final reading or mark it unavailable, not both.");
+        }
+
+        if (!request.OldFinalReadingUnavailable && request.OldFinalReading is null)
+        {
+            return BadRequest("Provide the previous meter's final reading or mark it unavailable.");
+        }
+
+        if (request.OldFinalReading is < 0m)
+        {
+            return BadRequest("The previous meter's final reading cannot be negative.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            return BadRequest("A replacement reason is required.");
+        }
+
+        var replacementDate = PropertyLocalDateAt(request.ReplacementOccurredAtUtc, property.TimeZoneId);
+        if (active.InstallationDate is { } installedOn && replacementDate < installedOn)
+        {
+            return BadRequest("The replacement date cannot precede the current meter's installation date.");
+        }
+
+        var lastApproved = await db.BillingCycles.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.Status == BillingCycleStatus.Approved)
+            .OrderByDescending(item => item.BillingMonth).FirstOrDefaultAsync(cancellationToken);
+        if (lastApproved is not null && replacementDate <= lastApproved.BillingMonth.AddMonths(1).AddDays(-1))
+        {
+            return Results.Conflict(new { message = "This replacement date would reinterpret an approved billing period. Choose a date after the last approved month." });
+        }
+
+        var replacementMonth = new DateOnly(replacementDate.Year, replacementDate.Month, 1);
+        var affectedCycle = await db.BillingCycles.FirstOrDefaultAsync(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.BillingMonth == replacementMonth, cancellationToken);
+        if (affectedCycle is not null && affectedCycle.Status == BillingCycleStatus.Submitted)
+        {
+            return Results.Conflict(new { message = "Return the submitted billing month for correction before replacing this meter." });
+        }
+
+        var unit = await db.Units.AsNoTracking().FirstOrDefaultAsync(item => item.Id == active.UnitId, cancellationToken);
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var before = JsonSerializer.Serialize(new { active.Id, active.SerialNumber, active.DisplayLabel, active.OpeningReading, active.InstallationDate, active.EndedOn });
+            active.End(replacementDate, actor.UserId, request.Reason, request.OldFinalReadingUnavailable ? null : request.OldFinalReading, request.OldFinalReadingUnavailable);
+
+            var replacement = new MeterInstallation(actor.OrganizationId, propertyId, active.UnitId, request.NewMainMeterId ?? active.MainMeterId,
+                request.NewSerialNumber, request.NewDisplayLabel, replacementDate, request.NewOpeningReading, replacementDate, active.Id, true, actor.UserId);
+            db.MeterInstallations.Add(replacement);
+
+            var after = JsonSerializer.Serialize(new { replacement.Id, replacement.SerialNumber, replacement.OpeningReading, replacement.InstallationDate, ReplacedInstallationId = active.Id, request.OldFinalReadingUnavailable, request.OldFinalReading });
+            db.MeterInstallationAuditEntries.Add(new MeterInstallationAuditEntry(actor.OrganizationId, propertyId, active.UnitId, replacement.Id, active.Id, actor.UserId,
+                MeterInstallationAuditAction.Replaced, replacementDate, request.Reason, before, after, request.SubmissionKey));
+
+            string? blocking = null;
+            var affectedDraft = affectedCycle is not null && affectedCycle.Status is BillingCycleStatus.Draft or BillingCycleStatus.Returned;
+            if (affectedDraft)
+            {
+                blocking = await RecalculateCycleElectricitySegmentsAsync(db, affectedCycle!, cancellationToken);
+                affectedCycle!.MarkDataChanged(actor.UserId);
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return Results.Ok(new MeterReplacementResponse(active.Id, ToMeterInstallationResponse(replacement, unit?.Name), request.ReplacementOccurredAtUtc, replacementDate.ToString("yyyy-MM-dd"), affectedDraft, blocking));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This submeter changed concurrently. Refresh before replacing it." });
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            var retry = await db.MeterInstallationAuditEntries.AsNoTracking().FirstOrDefaultAsync(item => item.OrganizationId == actor.OrganizationId && item.SubmissionKey == request.SubmissionKey, cancellationToken);
+            return retry is not null
+                ? Results.Conflict(new { message = "This replacement request was already recorded. Refresh to see the current meter." })
+                : Results.Conflict(new { message = "The replacement could not be saved atomically. No change was recorded." });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The replacement could not be persisted atomically. No change was recorded.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    private static DateOnly PropertyLocalDateAt(DateTimeOffset instant, string timeZoneId)
+    {
+        try
+        {
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, zone).DateTime);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return DateOnly.FromDateTime(instant.UtcDateTime);
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return DateOnly.FromDateTime(instant.UtcDateTime);
+        }
+    }
+
+    private sealed record MeterSegmentPlan(
+        Guid? InstallationId,
+        int SortOrder,
+        DateOnly? StartDate,
+        DateOnly? EndDate,
+        decimal? PreviousReading,
+        MeterReadingSource PreviousSource,
+        DateOnly? PreviousDate,
+        decimal? CurrentReading,
+        DateOnly? CurrentDate,
+        decimal? Consumption,
+        bool FinalUnavailable);
+
+    private sealed record MeterSegmentOutcome(
+        IReadOnlyList<MeterSegmentPlan> Segments,
+        string? BlockingReason,
+        decimal? TotalConsumption,
+        Guid? ActiveInstallationId,
+        MeterSegmentPlan? Primary);
+
+    private static MeterSegmentOutcome PlanMeterSegments(
+        IReadOnlyList<MeterInstallation> installations,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        decimal? carriedReading,
+        Guid? carriedInstallationId,
+        DateOnly? carriedDate,
+        decimal? activeCurrent,
+        DateOnly? activeCurrentDate)
+    {
+        if (installations.Count == 0)
+        {
+            return new MeterSegmentOutcome([], null, null, null, null);
+        }
+
+        var ordered = installations
+            .OrderBy(item => item.InstallationDate ?? DateOnly.MinValue)
+            .ThenBy(item => item.CreatedAtUtc)
+            .ToList();
+        var relevant = ordered
+            .Where(item => (item.InstallationDate ?? DateOnly.MinValue) <= periodEnd && (item.EndedOn ?? DateOnly.MaxValue) >= periodStart)
+            .ToList();
+        if (relevant.Count == 0)
+        {
+            return new MeterSegmentOutcome([], null, null, null, null);
+        }
+
+        var plans = new List<MeterSegmentPlan>();
+        var complete = true;
+        string? blocking = null;
+        for (var index = 0; index < relevant.Count; index++)
+        {
+            var installation = relevant[index];
+            var start = installation.InstallationDate is { } startDate && startDate > periodStart ? startDate : periodStart;
+            var end = installation.EndedOn is { } endDate && endDate < periodEnd ? endDate : periodEnd;
+
+            decimal? previous;
+            MeterReadingSource source;
+            DateOnly? previousDate;
+            var sameMeter = carriedInstallationId == installation.Id || (carriedInstallationId is null && installation.InstallationDate is null);
+            if (index == 0 && carriedReading is not null && sameMeter)
+            {
+                previous = carriedReading;
+                source = MeterReadingSource.ApprovedPeriod;
+                previousDate = carriedDate;
+            }
+            else if (installation.OpeningReading is not null)
+            {
+                previous = installation.OpeningReading;
+                source = MeterReadingSource.OpeningEntry;
+                previousDate = installation.OpeningReadingDate;
+            }
+            else
+            {
+                previous = null;
+                source = MeterReadingSource.Missing;
+                previousDate = null;
+            }
+
+            decimal? current;
+            DateOnly? currentDate;
+            if (installation.IsActive)
+            {
+                current = activeCurrent;
+                currentDate = activeCurrentDate;
+            }
+            else
+            {
+                current = installation.FinalReading;
+                currentDate = installation.EndedOn;
+            }
+
+            decimal? consumption = null;
+            if (previous is not null && current is not null && current >= previous)
+            {
+                consumption = current - previous;
+            }
+            else
+            {
+                complete = false;
+                if (!installation.IsActive && installation.FinalReadingUnavailable)
+                {
+                    blocking ??= "Meter replacement: the previous meter's final reading is unavailable for this period, so this total cannot be completed or approved.";
+                }
+                else if (previous is null)
+                {
+                    blocking ??= index == 0
+                        ? "Opening electricity reading and current reading are required; no immediately preceding approved period is available."
+                        : "Opening electricity reading is required.";
+                }
+                else if (current is null)
+                {
+                    blocking ??= "Current electricity reading is required.";
+                }
+                else
+                {
+                    blocking ??= "The current reading is below this segment's opening reading; correct it or record a meter replacement.";
+                }
+            }
+
+            plans.Add(new MeterSegmentPlan(installation.Id, index, start, end, previous, source, previousDate, current, currentDate, consumption, !installation.IsActive && installation.FinalReadingUnavailable));
+        }
+
+        var active = relevant.LastOrDefault(item => item.IsActive);
+        var primary = active is not null ? plans.First(plan => plan.InstallationId == active.Id) : plans[^1];
+        decimal? total = complete ? plans.Sum(plan => plan.Consumption ?? 0m) : null;
+        return new MeterSegmentOutcome(plans, complete ? null : blocking, total, active?.Id, primary);
+    }
+
+    private static async Task<Dictionary<Guid, List<MeterInstallation>>> LoadInstallationsByUnitAsync(PropertyManagementDbContext db, Guid organizationId, IReadOnlyCollection<Guid> unitIds, CancellationToken cancellationToken)
+    {
+        if (unitIds.Count == 0)
+        {
+            return new Dictionary<Guid, List<MeterInstallation>>();
+        }
+
+        var installations = await db.MeterInstallations.AsNoTracking()
+            .Where(item => item.OrganizationId == organizationId && unitIds.Contains(item.UnitId))
+            .ToListAsync(cancellationToken);
+        return installations.GroupBy(item => item.UnitId).ToDictionary(group => group.Key, group => group.ToList());
+    }
+
+    private static async Task<Dictionary<Guid, (decimal? Reading, Guid? InstallationId, DateOnly? Date)>> LoadCarriedReadingsAsync(
+        PropertyManagementDbContext db, Guid organizationId, Guid propertyId, DateOnly billingMonth, CancellationToken cancellationToken)
+    {
+        var carried = new Dictionary<Guid, (decimal?, Guid?, DateOnly?)>();
+        var priorCycle = await db.BillingCycles.AsNoTracking().FirstOrDefaultAsync(item =>
+            item.OrganizationId == organizationId && item.PropertyId == propertyId && item.BillingMonth == billingMonth.AddMonths(-1), cancellationToken);
+        if (priorCycle is null || priorCycle.Status != BillingCycleStatus.Approved)
+        {
+            return carried;
+        }
+
+        var rows = await (from bill in db.BillingUnitBills.AsNoTracking()
+                          join line in db.BillingChargeLines.AsNoTracking() on bill.Id equals line.BillingUnitBillId
+                          where bill.BillingCycleId == priorCycle.Id && bill.OrganizationId == organizationId && line.ChargeType == ChargeType.Electricity
+                          select new { bill.UnitId, line.CurrentReading, line.MeterInstallationId, line.CurrentReadingDate }).ToListAsync(cancellationToken);
+        foreach (var row in rows)
+        {
+            carried[row.UnitId] = (row.CurrentReading, row.MeterInstallationId, row.CurrentReadingDate);
+        }
+
+        return carried;
+    }
+
+    private static async Task ApplyMeterSegmentsAsync(PropertyManagementDbContext db, BillingChargeLine line, IReadOnlyList<MeterSegmentPlan> plans, CancellationToken cancellationToken)
+    {
+        var existing = await db.BillingMeterSegments.Where(item => item.BillingChargeLineId == line.Id).ToListAsync(cancellationToken);
+        if (existing.Count > 0)
+        {
+            db.BillingMeterSegments.RemoveRange(existing);
+        }
+
+        foreach (var plan in plans)
+        {
+            db.BillingMeterSegments.Add(new BillingMeterSegment(line.OrganizationId, line.Id, plan.InstallationId, plan.SortOrder, plan.StartDate, plan.EndDate,
+                plan.PreviousReading, plan.PreviousSource, plan.PreviousDate, plan.CurrentReading, plan.CurrentDate, plan.Consumption, plan.FinalUnavailable));
+        }
+    }
+
+    /// <summary>
+    /// Applies installation segment plans to a metered line: writes the segment rows, points the line at
+    /// the active installation, and mirrors the active segment on the line for backward-compatible readers.
+    /// </summary>
+    private static void ApplySegmentOutcomeToLine(BillingChargeLine line, MeterSegmentOutcome outcome)
+    {
+        line.SetMeterInstallation(outcome.ActiveInstallationId);
+        if (outcome.Primary is null)
+        {
+            return;
+        }
+
+        var amount = outcome.TotalConsumption is null ? 0m : RoundMoney(outcome.TotalConsumption.Value * (line.RateSnapshot ?? 0m));
+        line.SetMeterReadings(outcome.Primary.PreviousReading, outcome.Primary.PreviousDate, outcome.Primary.CurrentReading, outcome.Primary.CurrentDate,
+            outcome.Primary.PreviousSource, outcome.TotalConsumption, amount);
+    }
+
+    private static async Task<string?> RecalculateCycleElectricitySegmentsAsync(PropertyManagementDbContext db, BillingCycle cycle, CancellationToken cancellationToken)
+    {
+        var bills = await db.BillingUnitBills.Where(item => item.BillingCycleId == cycle.Id && item.OrganizationId == cycle.OrganizationId).ToListAsync(cancellationToken);
+        if (bills.Count == 0)
+        {
+            return null;
+        }
+
+        var billIds = bills.Select(item => item.Id).ToArray();
+        var lines = await db.BillingChargeLines.Where(item => billIds.Contains(item.BillingUnitBillId) && item.ChargeType == ChargeType.Electricity).ToListAsync(cancellationToken);
+        var linesByBill = lines.GroupBy(item => item.BillingUnitBillId).ToDictionary(group => group.Key, group => group.ToList());
+        var unitIds = bills.Select(item => item.UnitId).Distinct().ToArray();
+        var installationsByUnit = await LoadInstallationsByUnitAsync(db, cycle.OrganizationId, unitIds, cancellationToken);
+        if (installationsByUnit.Count == 0)
+        {
+            return null;
+        }
+
+        var carried = await LoadCarriedReadingsAsync(db, cycle.OrganizationId, cycle.PropertyId, cycle.BillingMonth, cancellationToken);
+        var periodStart = cycle.BillingMonth;
+        var periodEnd = cycle.BillingMonth.AddMonths(1).AddDays(-1);
+        string? firstBlocking = null;
+        foreach (var bill in bills)
+        {
+            if (!linesByBill.TryGetValue(bill.Id, out var billLines) || !installationsByUnit.TryGetValue(bill.UnitId, out var unitInstallations) || unitInstallations.Count == 0)
+            {
+                continue;
+            }
+
+            var line = billLines.First(item => item.ChargeType == ChargeType.Electricity);
+            var carriedReading = carried.GetValueOrDefault(bill.UnitId);
+            var outcome = PlanMeterSegments(unitInstallations, periodStart, periodEnd, carriedReading.Reading, carriedReading.InstallationId, carriedReading.Date, line.CurrentReading, line.CurrentReadingDate);
+            await ApplyMeterSegmentsAsync(db, line, outcome.Segments, cancellationToken);
+            ApplySegmentOutcomeToLine(line, outcome);
+            RecalculateBillState(bill, billLines, meterSegmentAware: true, meterBlocking: outcome.BlockingReason);
+            if (outcome.BlockingReason is not null)
+            {
+                firstBlocking ??= outcome.BlockingReason;
+            }
+        }
+
+        return firstBlocking;
+    }
+
     private static string BuildMeterLinkUrl(IConfiguration configuration, string token)
     {
         var configured = configuration["PublicAppBaseUrl"] ?? configuration["Frontend:PublicBaseUrl"] ?? "http://localhost:3000";
@@ -1036,7 +1699,7 @@ public static class PrimeTectEndpointMapping
         new(link.Id, link.PropertyId, link.UnitId, propertyName, unitName, link.Placement, url, svg, link.CreatedAtUtc, link.RevokedAtUtc, link.IsActive);
 
     private static MeterPhotoResponse ToMeterPhotoResponse(MeterPhoto photo, string? ocrExplanation = null) =>
-        new(photo.Id, photo.PropertyId, photo.UnitId, photo.BillingCycleId, photo.BillingUnitBillId, photo.ContentType, photo.FileExtension, photo.ByteLength, photo.Width, photo.Height, photo.OriginalFileName, photo.OcrOutcome, photo.OcrProviderVersion, photo.OcrSuggestion, photo.OcrConfidence, ocrExplanation ?? (photo.OcrOutcome == "Unavailable" ? "Local OCR is not configured; confirm the reading manually." : null), photo.Status, photo.Status == MeterPhotoStatus.Attached, $"/api/meter-photos/{photo.Id}");
+        new(photo.Id, photo.PropertyId, photo.UnitId, photo.BillingCycleId, photo.BillingUnitBillId, photo.ContentType, photo.FileExtension, photo.ByteLength, photo.Width, photo.Height, photo.OriginalFileName, photo.OcrOutcome, photo.OcrProviderVersion, photo.OcrSuggestion, photo.OcrConfidence, ocrExplanation ?? (photo.OcrOutcome == "Unavailable" ? "Local OCR is not configured; confirm the reading manually." : null), photo.Status, photo.Status == MeterPhotoStatus.Attached, $"/api/meter-photos/{photo.Id}", photo.MeterInstallationId);
 
     private static async Task<IResult> GetStaffAsync(
         HttpContext httpContext,
@@ -1758,6 +2421,11 @@ public static class PrimeTectEndpointMapping
                 }
             }
 
+            var installationsByUnit = await LoadInstallationsByUnitAsync(db, actor.OrganizationId, units.Select(unit => unit.Id).ToArray(), cancellationToken);
+            var carriedByUnit = installationsByUnit.Count == 0
+                ? new Dictionary<Guid, (decimal? Reading, Guid? InstallationId, DateOnly? Date)>()
+                : await LoadCarriedReadingsAsync(db, actor.OrganizationId, propertyId, request.BillingMonth, cancellationToken);
+
             foreach (var unit in units)
             {
                 var unitOccupancies = occupancy.Where(item => item.Assignment.UnitId == unit.Id).OrderBy(item => item.Assignment.StartDate).ToList();
@@ -1818,6 +2486,14 @@ public static class PrimeTectEndpointMapping
                 }
 
                 RecalculateBillState(bill, billLines);
+                if (installationsByUnit.TryGetValue(unit.Id, out var unitInstallations) && unitInstallations.Count > 0 && billLines.FirstOrDefault(line => line.IsMetered) is { } meteredLine)
+                {
+                    var carried = carriedByUnit.GetValueOrDefault(unit.Id);
+                    var outcome = PlanMeterSegments(unitInstallations, request.BillingMonth, monthEnd, carried.Reading, carried.InstallationId, carried.Date, null, null);
+                    await ApplyMeterSegmentsAsync(db, meteredLine, outcome.Segments, cancellationToken);
+                    ApplySegmentOutcomeToLine(meteredLine, outcome);
+                    RecalculateBillState(bill, billLines, meterSegmentAware: true, meterBlocking: outcome.BlockingReason);
+                }
             }
 
             var snapshot = new { status = cycle.Status.ToString(), month = cycle.BillingMonth, units = units.Count };
@@ -1916,7 +2592,8 @@ public static class PrimeTectEndpointMapping
             .Where(item => item.BillingUnitBillId == bill.Id)
             .OrderBy(item => item.ChargeType)
             .ToListAsync(cancellationToken);
-        return Results.Ok(ToBillingStatementResponse(loaded.Cycle, "Unit", null, [ToBillingStatementUnitResponse(bill, lines)]));
+        var segmentsByLine = await LoadSegmentsByLineAsync(db, actor.OrganizationId, lines.Select(item => item.Id).ToArray(), cancellationToken);
+        return Results.Ok(ToBillingStatementResponse(loaded.Cycle, "Unit", null, [ToBillingStatementUnitResponse(bill, lines, segmentsByLine)]));
     }
 
     private static async Task<IResult> GetTenantBillingStatementAsync(
@@ -1969,7 +2646,8 @@ public static class PrimeTectEndpointMapping
             .Where(item => billIds.Contains(item.BillingUnitBillId))
             .OrderBy(item => item.ChargeType)
             .ToListAsync(cancellationToken);
-        return Results.Ok(ToBillingStatementResponse(loaded.Cycle, "Tenant", tenantId, bills.Select(bill => ToBillingStatementUnitResponse(bill, lines.Where(line => line.BillingUnitBillId == bill.Id))).ToList()));
+        var segmentsByLine = await LoadSegmentsByLineAsync(db, actor.OrganizationId, lines.Select(item => item.Id).ToArray(), cancellationToken);
+        return Results.Ok(ToBillingStatementResponse(loaded.Cycle, "Tenant", tenantId, bills.Select(bill => ToBillingStatementUnitResponse(bill, lines.Where(line => line.BillingUnitBillId == bill.Id), segmentsByLine)).ToList()));
     }
 
     private static async Task<IResult> GetPropertyBillingSummaryAsync(
@@ -2022,12 +2700,13 @@ public static class PrimeTectEndpointMapping
             .Where(item => billIds.Contains(item.BillingUnitBillId))
             .OrderBy(item => item.ChargeType)
             .ToListAsync(cancellationToken);
+        var segmentsByLine = await LoadSegmentsByLineAsync(db, actor.OrganizationId, lines.Select(item => item.Id).ToArray(), cancellationToken);
         var floors = bills.GroupBy(item => item.FloorNameSnapshot!, StringComparer.Ordinal)
             .OrderBy(group => group.Key, StringComparer.Ordinal)
             .Select(group => new BillingFloorSummaryResponse(
                 group.Key,
                 RoundMoney(group.Sum(bill => bill.Total)),
-                group.Select(bill => ToBillingStatementUnitResponse(bill, lines.Where(line => line.BillingUnitBillId == bill.Id))).ToList()))
+                group.Select(bill => ToBillingStatementUnitResponse(bill, lines.Where(line => line.BillingUnitBillId == bill.Id), segmentsByLine)).ToList()))
             .ToList();
         return Results.Ok(new BillingPropertySummaryResponse(
             loaded.Cycle.PropertyId,
@@ -2154,6 +2833,11 @@ public static class PrimeTectEndpointMapping
         var billById = bills.ToDictionary(bill => bill.Id);
         var lines = await db.BillingChargeLines.Where(line => line.OrganizationId == actor.OrganizationId && billById.Keys.Contains(line.BillingUnitBillId) && line.ChargeType == ChargeType.Electricity).ToListAsync(cancellationToken);
         var lineByBillId = lines.ToDictionary(line => line.BillingUnitBillId);
+        var unitIds = bills.Select(item => item.UnitId).Distinct().ToArray();
+        var installationsByUnit = await LoadInstallationsByUnitAsync(db, actor.OrganizationId, unitIds, cancellationToken);
+        var carriedByUnit = installationsByUnit.Count == 0
+            ? new Dictionary<Guid, (decimal? Reading, Guid? InstallationId, DateOnly? Date)>()
+            : await LoadCarriedReadingsAsync(db, actor.OrganizationId, propertyId, cycle.BillingMonth, cancellationToken);
         var requestedPhotoIds = (request.Entries ?? []).Where(entry => entry.MeterPhotoId.HasValue).Select(entry => entry.MeterPhotoId!.Value).Distinct().ToArray();
         var photosById = requestedPhotoIds.Length == 0
             ? new Dictionary<Guid, MeterPhoto>()
@@ -2175,6 +2859,16 @@ public static class PrimeTectEndpointMapping
                     || photo.Status == MeterPhotoStatus.Orphaned))
             {
                 return BadRequest("The selected meter photo does not belong to this room and billing month.");
+            }
+
+            var activeInstallationId = installationsByUnit.TryGetValue(billById[entry.UnitBillId].UnitId, out var unitInstallationsForEntry)
+                ? unitInstallationsForEntry.FirstOrDefault(item => item.IsActive)?.Id
+                : null;
+            if (entry.MeterPhotoId is not null
+                && photosById.TryGetValue(entry.MeterPhotoId.Value, out var installationPhoto)
+                && installationPhoto.MeterInstallationId != activeInstallationId)
+            {
+                return BadRequest("This meter photo was captured for a replaced meter. Capture a new photo for the current submeter before saving.");
             }
 
             if (line.PreviousReadingSource == MeterReadingSource.ApprovedPeriod && entry.PreviousReading is not null && entry.PreviousReading != line.PreviousReading)
@@ -2207,6 +2901,22 @@ public static class PrimeTectEndpointMapping
             foreach (var entry in request.Entries)
             {
                 var line = lineByBillId[entry.UnitBillId];
+                var unitId = billById[entry.UnitBillId].UnitId;
+                if (installationsByUnit.TryGetValue(unitId, out var unitInstallations) && unitInstallations.Any(item => item.IsActive))
+                {
+                    var carried = carriedByUnit.GetValueOrDefault(unitId);
+                    var outcome = PlanMeterSegments(unitInstallations, cycle.BillingMonth, cycle.BillingMonth.AddMonths(1).AddDays(-1), carried.Reading, carried.InstallationId, carried.Date, entry.CurrentReading, entry.CurrentReadingDate);
+                    await ApplyMeterSegmentsAsync(db, line, outcome.Segments, cancellationToken);
+                    ApplySegmentOutcomeToLine(line, outcome);
+                    if (entry.MeterPhotoId is not null)
+                    {
+                        line.SetMeterPhoto(entry.MeterPhotoId);
+                        photosById[entry.MeterPhotoId.Value].Attach(actor.UserId, entry.CurrentReading);
+                    }
+                    RecalculateBillState(billById[entry.UnitBillId], lines.Where(item => item.BillingUnitBillId == entry.UnitBillId), meterSegmentAware: true, meterBlocking: outcome.BlockingReason);
+                    continue;
+                }
+
                 var previous = entry.PreviousReading ?? line.PreviousReading;
                 var source = line.PreviousReadingSource == MeterReadingSource.ApprovedPeriod
                     ? MeterReadingSource.ApprovedPeriod
@@ -2557,6 +3267,11 @@ public static class PrimeTectEndpointMapping
 
         var billByUnit = bills.ToDictionary(item => item.UnitId);
         var lineByBill = lines.GroupBy(item => item.BillingUnitBillId).ToDictionary(group => group.Key, group => group.ToList());
+        var activeInstallations = (await db.MeterInstallations.AsNoTracking()
+            .Where(item => item.OrganizationId == actor.OrganizationId && item.PropertyId == propertyId && item.EndedOn == null)
+            .ToListAsync(cancellationToken))
+            .GroupBy(item => item.UnitId)
+            .ToDictionary(group => group.Key, group => group.First());
         var response = units.Select(unit =>
         {
             billByUnit.TryGetValue(unit.Id, out var bill);
@@ -2568,6 +3283,7 @@ public static class PrimeTectEndpointMapping
                 : null;
             var applicable = meter is not null || configuredElectricity is not null;
             var issue = issueCounts.GetValueOrDefault(unit.Id);
+            activeInstallations.TryGetValue(unit.Id, out var submeter);
             return new MeterRoomOverviewResponse(
                 unit.Id,
                 unit.Name,
@@ -2583,7 +3299,11 @@ public static class PrimeTectEndpointMapping
                 MeterReadingStatus(cycle?.Status, applicable, meter?.CurrentReading),
                 bill?.BlockingReason,
                 issue?.Total ?? 0,
-                issue?.Open ?? 0);
+                issue?.Open ?? 0,
+                submeter?.Id,
+                submeter?.DisplayLabel ?? submeter?.SerialNumber,
+                submeter is null ? null : submeter.IdentityKnown,
+                bill?.BlockingReason is not null && bill.BlockingReason.Contains("final reading is unavailable", StringComparison.OrdinalIgnoreCase));
         }).ToList();
 
         return Results.Ok(new MeterOverviewResponse(propertyId, billingMonth, cycle?.Id, cycle?.Status.ToString(), response));
@@ -4111,7 +4831,8 @@ public static class PrimeTectEndpointMapping
 
     private static BillingStatementUnitResponse ToBillingStatementUnitResponse(
         BillingUnitBill bill,
-        IEnumerable<BillingChargeLine> lines) =>
+        IEnumerable<BillingChargeLine> lines,
+        IReadOnlyDictionary<Guid, List<BillingMeterSegment>>? segmentsByLine = null) =>
         new(
             $"PT-{bill.Id:N}",
             bill.Id,
@@ -4140,7 +4861,24 @@ public static class PrimeTectEndpointMapping
                 line.WarningEnabled,
                 line.WarningThreshold,
                 line.Amount,
-                line.MeterPhotoId)).ToList());
+                line.MeterPhotoId,
+                line.MeterInstallationId,
+                segmentsByLine?.GetValueOrDefault(line.Id)?.Select(ToBillingMeterSegmentResponse).ToList())).ToList());
+
+    private static async Task<Dictionary<Guid, List<BillingMeterSegment>>> LoadSegmentsByLineAsync(
+        PropertyManagementDbContext db, Guid organizationId, IReadOnlyCollection<Guid> lineIds, CancellationToken cancellationToken)
+    {
+        if (lineIds.Count == 0)
+        {
+            return new Dictionary<Guid, List<BillingMeterSegment>>();
+        }
+
+        var segments = await db.BillingMeterSegments.AsNoTracking()
+            .Where(item => item.OrganizationId == organizationId && lineIds.Contains(item.BillingChargeLineId))
+            .OrderBy(item => item.SortOrder)
+            .ToListAsync(cancellationToken);
+        return segments.GroupBy(item => item.BillingChargeLineId).ToDictionary(group => group.Key, group => group.ToList());
+    }
 
     private static async Task<ComparisonSource> LoadComparisonSourceAsync(
         PropertyManagementDbContext db,
@@ -4285,6 +5023,15 @@ public static class PrimeTectEndpointMapping
         var bills = await db.BillingUnitBills.AsNoTracking().Where(item => item.BillingCycleId == billingCycleId).OrderBy(item => item.UnitNameSnapshot).ToListAsync(cancellationToken);
         var billIds = bills.Select(item => item.Id).ToArray();
         var lines = await db.BillingChargeLines.AsNoTracking().Where(item => billIds.Contains(item.BillingUnitBillId)).OrderBy(item => item.ChargeType).ToListAsync(cancellationToken);
+        var lineIds = lines.Select(item => item.Id).ToArray();
+        var segments = lineIds.Length == 0
+            ? []
+            : await db.BillingMeterSegments.AsNoTracking().Where(item => lineIds.Contains(item.BillingChargeLineId)).OrderBy(item => item.SortOrder).ToListAsync(cancellationToken);
+        var segmentsByLine = segments.GroupBy(item => item.BillingChargeLineId).ToDictionary(group => group.Key, group => group.ToList());
+        var installationIds = lines.Where(item => item.MeterInstallationId is not null).Select(item => item.MeterInstallationId!.Value).Distinct().ToArray();
+        var installationLabels = installationIds.Length == 0
+            ? new Dictionary<Guid, string?>()
+            : await db.MeterInstallations.AsNoTracking().Where(item => installationIds.Contains(item.Id)).ToDictionaryAsync(item => item.Id, item => item.DisplayLabel ?? item.SerialNumber, cancellationToken);
         var audit = await db.BillingAuditEntries.AsNoTracking().Where(item => item.BillingCycleId == billingCycleId).OrderBy(item => item.OccurredAtUtc).ToListAsync(cancellationToken);
         var billResponses = bills.Select(bill => new BillingUnitBillResponse(
             bill.Id,
@@ -4315,7 +5062,10 @@ public static class PrimeTectEndpointMapping
                 line.WarningEnabled,
                 line.WarningThreshold,
                 line.Amount,
-                line.MeterPhotoId)).ToList())).ToList();
+                line.MeterPhotoId,
+                line.MeterInstallationId,
+                segmentsByLine.GetValueOrDefault(line.Id)?.Select(ToBillingMeterSegmentResponse).ToList(),
+                line.MeterInstallationId is not null ? installationLabels.GetValueOrDefault(line.MeterInstallationId.Value) : null)).ToList())).ToList();
         return new BillingCycleResponse(
             cycle.Id,
             cycle.PropertyId,
@@ -4331,6 +5081,10 @@ public static class PrimeTectEndpointMapping
             billResponses,
             audit.Select(item => new BillingAuditResponse(item.Id, item.ActorUserId, item.Action, item.OccurredAtUtc, item.Reason, item.BeforeJson, item.AfterJson)).ToList());
     }
+
+    private static BillingMeterSegmentResponse ToBillingMeterSegmentResponse(BillingMeterSegment segment) =>
+        new(segment.MeterInstallationId, segment.SortOrder, segment.SegmentStartDate, segment.SegmentEndDate, segment.PreviousReading, segment.PreviousReadingSource,
+            segment.PreviousReadingDate, segment.CurrentReading, segment.CurrentReadingDate, segment.ConsumptionUnits, segment.FinalReadingUnavailable);
 
     private static IReadOnlyList<EffectiveCharge> ResolveEffectiveCharges(IReadOnlyList<ChargeConfiguration> configurations, Guid unitId, DateOnly billingMonth)
     {
@@ -4390,22 +5144,24 @@ public static class PrimeTectEndpointMapping
                 _ => "Custom charge",
             };
 
-    private static void RecalculateBillState(BillingUnitBill bill, IEnumerable<BillingChargeLine> chargeLines)
+    private static void RecalculateBillState(BillingUnitBill bill, IEnumerable<BillingChargeLine> chargeLines, bool meterSegmentAware = false, string? meterBlocking = null)
     {
         var lines = chargeLines.ToList();
         var electricity = lines.FirstOrDefault(line => line.ChargeType == ChargeType.Electricity);
         var blockingReason = bill.BlockingReason;
         if (bill.OccupancyAssignmentId is not null)
         {
-            blockingReason = electricity is null
-                ? null
-                : electricity.CurrentReading is null
-                    ? electricity.PreviousReadingSource == MeterReadingSource.Missing
-                        ? "Opening electricity reading and current reading are required; no immediately preceding approved period is available."
-                        : "Current electricity reading is required."
-                    : electricity.PreviousReading is null
-                        ? "Opening electricity reading is required."
-                        : null;
+            blockingReason = meterSegmentAware
+                ? meterBlocking
+                : electricity is null
+                    ? null
+                    : electricity.CurrentReading is null
+                        ? electricity.PreviousReadingSource == MeterReadingSource.Missing
+                            ? "Opening electricity reading and current reading are required; no immediately preceding approved period is available."
+                            : "Current electricity reading is required."
+                        : electricity.PreviousReading is null
+                            ? "Opening electricity reading is required."
+                            : null;
         }
 
         var total = RoundMoney(lines.Sum(line => line.Amount));

@@ -73,6 +73,11 @@ public sealed class MeterPhoto
     public decimal? ConfirmedReading { get; private set; }
     public Guid? ConfirmedByUserId { get; private set; }
 
+    /// <summary>The room submeter installation in effect when this evidence was captured, if known.</summary>
+    public Guid? MeterInstallationId { get; private set; }
+
+    public void AssociateInstallation(Guid? meterInstallationId) => MeterInstallationId = meterInstallationId;
+
     public void Attach(Guid actorUserId, decimal? confirmedReading)
     {
         Status = MeterPhotoStatus.Attached;

@@ -231,6 +231,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsMetered")
                         .HasColumnType("boolean");
 
+                    b.Property<Guid?>("MeterInstallationId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("MeterPhotoId")
                         .HasColumnType("uuid");
 
@@ -267,10 +270,10 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("MeterPhotoId");
+
                     b.HasIndex("BillingUnitBillId", "ChargeType")
                         .IsUnique();
-
-                    b.HasIndex("MeterPhotoId");
 
                     b.ToTable("billing_charge_lines", (string)null);
                 });
@@ -346,6 +349,65 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("billing_cycles", (string)null);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.BillingMeterSegment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("BillingChargeLineId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("ConsumptionUnits")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<decimal?>("CurrentReading")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<DateOnly?>("CurrentReadingDate")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("FinalReadingUnavailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid?>("MeterInstallationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("PreviousReading")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<DateOnly?>("PreviousReadingDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("PreviousReadingSource")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateOnly?>("SegmentEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("SegmentStartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BillingChargeLineId");
+
+                    b.HasIndex("OrganizationId", "BillingChargeLineId");
+
+                    b.ToTable("billing_meter_segments", (string)null);
                 });
 
             modelBuilder.Entity("PrimeTect.Domain.Entities.BillingUnitBill", b =>
@@ -709,13 +771,163 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.ToTable("floors", (string)null);
                 });
 
+            modelBuilder.Entity("PrimeTect.Domain.Entities.MeterInstallation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DisplayLabel")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("EndReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<DateTimeOffset?>("EndedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("EndedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly?>("EndedOn")
+                        .HasColumnType("date");
+
+                    b.Property<decimal?>("FinalReading")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<bool>("FinalReadingUnavailable")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IdentityKnown")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateOnly?>("InstallationDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("MainMeterId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("OpeningReading")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<DateOnly?>("OpeningReadingDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ReplacedInstallationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SerialNumber")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("UnitId")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MainMeterId");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("UnitId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_meter_installations_active_unit")
+                        .HasFilter("\"EndedOn\" IS NULL");
+
+                    b.HasIndex("OrganizationId", "PropertyId", "UnitId");
+
+                    b.ToTable("meter_installations", (string)null);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.MeterInstallationAuditEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AfterJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BeforeJson")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("InstallationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("PreviousInstallationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateOnly?>("ReplacementDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("SubmissionKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UnitId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("UnitId");
+
+                    b.HasIndex("OrganizationId", "SubmissionKey")
+                        .IsUnique();
+
+                    b.HasIndex("OrganizationId", "InstallationId", "OccurredAtUtc");
+
+                    b.ToTable("meter_installation_audit_entries", (string)null);
+                });
+
             modelBuilder.Entity("PrimeTect.Domain.Entities.MeterPhoto", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<DateTimeOffset?> ("AttachedAtUtc")
+                    b.Property<DateTimeOffset?>("AttachedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("BillingCycleId")
@@ -724,17 +936,20 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("BillingUnitBillId")
                         .HasColumnType("uuid");
 
+                    b.Property<long>("ByteLength")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid?>("ConfirmedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("ConfirmedReading")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
                     b.Property<string>("ContentType")
                         .IsRequired()
                         .HasMaxLength(80)
                         .HasColumnType("character varying(80)");
-
-                    b.Property<Guid?> ("ConfirmedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<decimal?> ("ConfirmedReading")
-                        .HasPrecision(18, 4)
-                        .HasColumnType("numeric(18,4)");
 
                     b.Property<string>("FileExtension")
                         .IsRequired()
@@ -744,29 +959,32 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<int>("Height")
                         .HasColumnType("integer");
 
+                    b.Property<Guid?>("MeterInstallationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("OcrConfidence")
+                        .HasPrecision(5, 4)
+                        .HasColumnType("numeric(5,4)");
+
                     b.Property<string>("OcrOutcome")
                         .IsRequired()
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
 
-                    b.Property<decimal?> ("OcrConfidence")
-                        .HasPrecision(5, 4)
-                        .HasColumnType("numeric(5,4)");
-
                     b.Property<string>("OcrProviderVersion")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
-                    b.Property<decimal?> ("OcrSuggestion")
+                    b.Property<decimal?>("OcrSuggestion")
                         .HasPrecision(18, 4)
                         .HasColumnType("numeric(18,4)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("OriginalFileName")
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
-
-                    b.Property<Guid>("OrganizationId")
-                        .HasColumnType("uuid");
 
                     b.Property<Guid>("PropertyId")
                         .HasColumnType("uuid");
@@ -784,14 +1002,11 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("UnitId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("UploadedByUserId")
-                        .HasColumnType("uuid");
-
                     b.Property<DateTimeOffset>("UploadedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<long>("ByteLength")
-                        .HasColumnType("bigint");
+                    b.Property<Guid>("UploadedByUserId")
+                        .HasColumnType("uuid");
 
                     b.Property<int>("Width")
                         .HasColumnType("integer");
@@ -799,11 +1014,17 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("BillingCycleId");
+
                     b.HasIndex("BillingUnitBillId");
+
                     b.HasIndex("PropertyId");
+
                     b.HasIndex("UnitId");
+
+                    b.HasIndex("OrganizationId", "StorageKey")
+                        .IsUnique();
+
                     b.HasIndex("OrganizationId", "BillingCycleId", "UnitId", "Status");
-                    b.HasIndex("OrganizationId", "StorageKey").IsUnique();
 
                     b.ToTable("meter_photos", (string)null);
                 });
@@ -813,20 +1034,49 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
-                    b.Property<Guid>("CreatedByUserId").HasColumnType("uuid");
-                    b.Property<DateTimeOffset>("CreatedAtUtc").HasColumnType("timestamp with time zone");
-                    b.Property<Guid>("OrganizationId").HasColumnType("uuid");
-                    b.Property<Guid>("PropertyId").HasColumnType("uuid");
-                    b.Property<string>("Placement").IsRequired().HasMaxLength(30).HasColumnType("character varying(30)");
-                    b.Property<DateTimeOffset?>("RevokedAtUtc").HasColumnType("timestamp with time zone");
-                    b.Property<Guid?>("RevokedByUserId").HasColumnType("uuid");
-                    b.Property<string>("TokenHash").IsRequired().HasMaxLength(128).HasColumnType("character varying(128)");
-                    b.Property<Guid>("UnitId").HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Placement")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("RevokedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("RevokedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<Guid>("UnitId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
+
                     b.HasIndex("PropertyId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
                     b.HasIndex("UnitId");
-                    b.HasIndex("TokenHash").IsUnique();
+
                     b.HasIndex("OrganizationId", "PropertyId", "UnitId", "RevokedAtUtc");
+
                     b.ToTable("meter_qr_links", (string)null);
                 });
 
@@ -968,6 +1218,10 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .HasPrecision(9, 6)
                         .HasColumnType("numeric(9,6)");
 
+                    b.Property<decimal?>("Longitude")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("numeric(9,6)");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -980,10 +1234,6 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
-
-                    b.Property<decimal?>("Longitude")
-                        .HasPrecision(9, 6)
-                        .HasColumnType("numeric(9,6)");
 
                     b.Property<string>("TimeZoneId")
                         .IsRequired()
@@ -1294,6 +1544,96 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.ToTable("user_notifications", (string)null);
                 });
 
+            modelBuilder.Entity("PrimeTect.Domain.Entities.UtilityAccount", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CustomerNumber")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("DisplayLabel")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ProviderName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("OrganizationId", "PropertyId");
+
+                    b.ToTable("utility_accounts", (string)null);
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.UtilityMainMeter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DisplayLabel")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateOnly?>("EndedOn")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("InstalledOn")
+                        .HasColumnType("date");
+
+                    b.Property<string>("MeterNumber")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UtilityAccountId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("UtilityAccountId");
+
+                    b.HasIndex("OrganizationId", "PropertyId");
+
+                    b.HasIndex("OrganizationId", "UtilityAccountId");
+
+                    b.ToTable("utility_main_meters", (string)null);
+                });
+
             modelBuilder.Entity("PrimeTect.Infrastructure.Identity.AppUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1460,6 +1800,15 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("PrimeTect.Domain.Entities.BillingMeterSegment", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.BillingChargeLine", null)
+                        .WithMany()
+                        .HasForeignKey("BillingChargeLineId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("PrimeTect.Domain.Entities.BillingUnitBill", b =>
                 {
                     b.HasOne("PrimeTect.Domain.Entities.BillingCycle", null)
@@ -1536,6 +1885,41 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasOne("PrimeTect.Domain.Entities.Property", null)
                         .WithMany()
                         .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.MeterInstallation", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.UtilityMainMeter", null)
+                        .WithMany()
+                        .HasForeignKey("MainMeterId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("PrimeTect.Domain.Entities.Property", null)
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PrimeTect.Domain.Entities.Unit", null)
+                        .WithMany()
+                        .HasForeignKey("UnitId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.MeterInstallationAuditEntry", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.Property", null)
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PrimeTect.Domain.Entities.Unit", null)
+                        .WithMany()
+                        .HasForeignKey("UnitId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
@@ -1682,6 +2066,30 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasOne("PrimeTect.Domain.Entities.RoomMeterIssue", null)
                         .WithMany()
                         .HasForeignKey("RoomMeterIssueId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.UtilityAccount", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.Property", null)
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.UtilityMainMeter", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.Property", null)
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("PrimeTect.Domain.Entities.UtilityAccount", null)
+                        .WithMany()
+                        .HasForeignKey("UtilityAccountId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

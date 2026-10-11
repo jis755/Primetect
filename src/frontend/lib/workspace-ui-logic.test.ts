@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adoptMeterOcrSuggestion, collectionBillDisplay, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
+import { adoptMeterOcrSuggestion, collectionBillDisplay, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, meterSegmentLabel, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, replacementOpeningReadingValid, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
 
 test("room entry advances only after a successful save and stops at the last room", () => {
   assert.equal(nextMeterRoomIndex(0, 3, false), 1);
@@ -91,4 +91,21 @@ test("failed saves never advance to the next room and successful saves do", () =
   assert.equal(meterRoomAdvanceAfterSave(true, 1, 5, false), 2);
   assert.equal(meterRoomAdvanceAfterSave(true, 4, 5, false), 4);
   assert.equal(meterRoomAdvanceAfterSave(true, 0, 3, true), 0);
+});
+
+test("replacement opening reading keeps zero distinct from missing input", () => {
+  assert.deepEqual(replacementOpeningReadingValid("0"), { valid: true, reason: "ok", value: 0 });
+  assert.deepEqual(replacementOpeningReadingValid("35"), { valid: true, reason: "ok", value: 35 });
+  assert.deepEqual(replacementOpeningReadingValid("০"), { valid: true, reason: "ok", value: 0 });
+  assert.equal(replacementOpeningReadingValid("").valid, false);
+  assert.equal(replacementOpeningReadingValid("   ").reason, "missing");
+  assert.equal(replacementOpeningReadingValid("-1").reason, "invalid");
+  assert.equal(replacementOpeningReadingValid("abc").reason, "invalid");
+});
+
+test("replacement segments are described per installation and never cross-subtracted", () => {
+  assert.equal(meterSegmentLabel({ sortOrder: 0, previousReading: 10020, currentReading: 10040, consumptionUnits: 20, finalReadingUnavailable: false }), "20 units");
+  assert.equal(meterSegmentLabel({ sortOrder: 1, previousReading: 35, currentReading: 50, consumptionUnits: 15, finalReadingUnavailable: false }), "15 units");
+  assert.equal(meterSegmentLabel({ sortOrder: 0, previousReading: 10020, currentReading: null, consumptionUnits: null, finalReadingUnavailable: true }), "old final reading unavailable");
+  assert.equal(meterSegmentLabel({ sortOrder: 1, previousReading: 35, currentReading: null, consumptionUnits: null, finalReadingUnavailable: false }), "incomplete");
 });

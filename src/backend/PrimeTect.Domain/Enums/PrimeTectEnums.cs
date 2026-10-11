@@ -160,3 +160,10 @@ public enum OnboardingStatus
 {
     NotConnected = 1,
 }
+
+public enum MeterInstallationAuditAction
+{
+    Installed = 1,
+    Adopted = 2,
+    Replaced = 3,
+}

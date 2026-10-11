@@ -250,7 +250,8 @@ public sealed record MeterPhotoResponse(
     string? OcrExplanation,
     MeterPhotoStatus Status,
     bool IsAttached,
-    string PhotoUrl);
+    string PhotoUrl,
+    Guid? MeterInstallationId = null);
 
 public sealed record MeterRoomOverviewResponse(
     Guid UnitId,
@@ -267,7 +268,11 @@ public sealed record MeterRoomOverviewResponse(
     string ReadingStatus,
     string? BlockingReason,
     int ReportedIssueCount,
-    int OpenIssueCount);
+    int OpenIssueCount,
+    Guid? MeterInstallationId = null,
+    string? SubmeterLabel = null,
+    bool? SubmeterIdentityKnown = null,
+    bool? SubmeterFinalReadingUnavailable = null);
 
 public sealed record MeterOverviewResponse(
     Guid PropertyId,
@@ -320,7 +325,10 @@ public sealed record BillingChargeLineResponse(
     bool WarningEnabled,
     decimal? WarningThreshold,
     decimal Amount,
-    Guid? MeterPhotoId);
+    Guid? MeterPhotoId,
+    Guid? MeterInstallationId = null,
+    IReadOnlyList<BillingMeterSegmentResponse>? Segments = null,
+    string? MeterLabel = null);
 
 public sealed record BillingUnitBillResponse(
     Guid Id,
@@ -376,7 +384,10 @@ public sealed record BillingStatementChargeResponse(
     bool WarningEnabled,
     decimal? WarningThreshold,
     decimal Amount,
-    Guid? MeterPhotoId);
+    Guid? MeterPhotoId,
+    Guid? MeterInstallationId = null,
+    IReadOnlyList<BillingMeterSegmentResponse>? Segments = null,
+    string? MeterLabel = null);
 
 public sealed record BillingStatementUnitResponse(
     string BillReference,
@@ -461,3 +472,119 @@ public sealed record BillingComparisonResponse(
     BillingComparisonConsumptionResponse Electricity,
     IReadOnlyList<BillingComparisonMetricResponse> Charges,
     IReadOnlyList<string> CoverageNotes);
+
+public sealed record BillingMeterSegmentResponse(
+    Guid? MeterInstallationId,
+    int SortOrder,
+    DateOnly? SegmentStartDate,
+    DateOnly? SegmentEndDate,
+    decimal? PreviousReading,
+    MeterReadingSource PreviousReadingSource,
+    DateOnly? PreviousReadingDate,
+    decimal? CurrentReading,
+    DateOnly? CurrentReadingDate,
+    decimal? ConsumptionUnits,
+    bool FinalReadingUnavailable);
+
+public sealed record UtilityAccountRequest(string ProviderName, string CustomerNumber, string? DisplayLabel);
+
+public sealed record UtilityAccountResponse(
+    Guid Id,
+    Guid PropertyId,
+    string ProviderName,
+    string CustomerNumber,
+    string? DisplayLabel,
+    DateTimeOffset CreatedAtUtc);
+
+public sealed record UtilityMainMeterRequest(Guid UtilityAccountId, string MeterNumber, string? DisplayLabel, DateOnly? InstalledOn);
+
+public sealed record UtilityMainMeterEndRequest(DateOnly EndedOn);
+
+public sealed record UtilityMainMeterResponse(
+    Guid Id,
+    Guid PropertyId,
+    Guid UtilityAccountId,
+    string MeterNumber,
+    string? DisplayLabel,
+    DateOnly? InstalledOn,
+    DateOnly? EndedOn,
+    bool IsActive);
+
+public sealed record MeterInstallationRequest(
+    Guid UnitId,
+    Guid? MainMeterId,
+    string? SerialNumber,
+    string? DisplayLabel,
+    DateOnly? InstallationDate,
+    decimal? OpeningReading,
+    DateOnly? OpeningReadingDate,
+    bool? IdentityKnown,
+    string? Reason);
+
+public sealed record MeterInstallationUpdateRequest(
+    Guid? MainMeterId,
+    string? SerialNumber,
+    string? DisplayLabel,
+    DateOnly? InstallationDate,
+    bool? IdentityKnown,
+    string? Reason);
+
+public sealed record MeterInstallationResponse(
+    Guid Id,
+    Guid PropertyId,
+    Guid UnitId,
+    string UnitName,
+    Guid? MainMeterId,
+    string? SerialNumber,
+    string? DisplayLabel,
+    DateOnly? InstallationDate,
+    decimal? OpeningReading,
+    DateOnly? OpeningReadingDate,
+    Guid? ReplacedInstallationId,
+    bool IdentityKnown,
+    DateOnly? EndedOn,
+    string? EndReason,
+    decimal? FinalReading,
+    bool FinalReadingUnavailable,
+    bool IsActive,
+    long Version,
+    DateTimeOffset CreatedAtUtc);
+
+public sealed record MeterReplacementRequest(
+    long ExpectedInstallationVersion,
+    DateTimeOffset ReplacementOccurredAtUtc,
+    string Reason,
+    decimal? OldFinalReading,
+    bool OldFinalReadingUnavailable,
+    string? NewSerialNumber,
+    string? NewDisplayLabel,
+    decimal NewOpeningReading,
+    Guid? NewMainMeterId,
+    Guid SubmissionKey);
+
+public sealed record MeterReplacementResponse(
+    Guid PreviousInstallationId,
+    MeterInstallationResponse NewInstallation,
+    DateTimeOffset ReplacementOccurredAtUtc,
+    string PropertyLocalDate,
+    bool AffectedDraftRecalculated,
+    string? BlockingMessage);
+
+public sealed record MeterInstallationAuditResponse(
+    Guid Id,
+    Guid InstallationId,
+    Guid? PreviousInstallationId,
+    Guid ActorUserId,
+    MeterInstallationAuditAction Action,
+    DateOnly? ReplacementDate,
+    DateTimeOffset OccurredAtUtc,
+    string? Reason,
+    string? Before,
+    string? After);
+
+public sealed record MeterSetupResponse(
+    Guid PropertyId,
+    IReadOnlyList<UtilityAccountResponse> Accounts,
+    IReadOnlyList<UtilityMainMeterResponse> MainMeters,
+    IReadOnlyList<MeterInstallationResponse> Installations,
+    IReadOnlyList<MeterInstallationAuditResponse> Audit);

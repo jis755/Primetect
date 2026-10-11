@@ -80,3 +80,19 @@ export function meterPhotoConfirmationRequired(hasPhoto: boolean, confirmed: boo
 export function meterRoomAdvanceAfterSave(saved: boolean, currentIndex: number, roomCount: number, unfinishedOnly: boolean) {
   return saved ? nextMeterRoomIndex(currentIndex, roomCount, unfinishedOnly) : nextMeterRoomIndex(currentIndex, roomCount, true);
 }
+
+export type MeterSegmentLike = { sortOrder: number; previousReading: number | null; currentReading: number | null; consumptionUnits: number | null; finalReadingUnavailable: boolean };
+
+export function meterSegmentLabel(segment: MeterSegmentLike) {
+  if (segment.consumptionUnits !== null) return `${segment.consumptionUnits} units`;
+  if (segment.finalReadingUnavailable) return "old final reading unavailable";
+  return "incomplete";
+}
+
+export function replacementOpeningReadingValid(raw: string) {
+  const normalized = raw.replace(/[০-৯]/g, (digit) => String("০১২৩৪৫৬৭৮৯".indexOf(digit))).trim();
+  if (!normalized) return { valid: false as const, reason: "missing" as const, value: null };
+  const value = Number(normalized);
+  if (!Number.isFinite(value) || value < 0) return { valid: false as const, reason: "invalid" as const, value: null };
+  return { valid: true as const, reason: "ok" as const, value };
+}

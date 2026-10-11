@@ -49,6 +49,16 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<MeterPhoto> MeterPhotos => Set<MeterPhoto>();
 
+    public DbSet<UtilityAccount> UtilityAccounts => Set<UtilityAccount>();
+
+    public DbSet<UtilityMainMeter> UtilityMainMeters => Set<UtilityMainMeter>();
+
+    public DbSet<MeterInstallation> MeterInstallations => Set<MeterInstallation>();
+
+    public DbSet<BillingMeterSegment> BillingMeterSegments => Set<BillingMeterSegment>();
+
+    public DbSet<MeterInstallationAuditEntry> MeterInstallationAuditEntries => Set<MeterInstallationAuditEntry>();
+
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
 
     public DbSet<OrganizationRolePermission> OrganizationRolePermissions => Set<OrganizationRolePermission>();
@@ -233,6 +243,7 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(line => line.ConsumptionUnits).HasPrecision(18, 4);
             entity.Property(line => line.Amount).HasPrecision(18, 2);
             entity.Property(line => line.WarningThreshold).HasPrecision(18, 2);
+            entity.Property(line => line.MeterInstallationId);
             entity.HasOne<MeterPhoto>().WithMany().HasForeignKey(line => line.MeterPhotoId).OnDelete(DeleteBehavior.SetNull);
             entity.HasIndex(line => new { line.BillingUnitBillId, line.ChargeType }).IsUnique();
             entity.HasOne<BillingUnitBill>().WithMany().HasForeignKey(line => line.BillingUnitBillId).OnDelete(DeleteBehavior.Cascade);
@@ -364,12 +375,90 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(photo => photo.OcrConfidence).HasPrecision(5, 4);
             entity.Property(photo => photo.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             entity.Property(photo => photo.ConfirmedReading).HasPrecision(18, 4);
+            entity.Property(photo => photo.MeterInstallationId);
             entity.HasIndex(photo => new { photo.OrganizationId, photo.BillingCycleId, photo.UnitId, photo.Status });
             entity.HasIndex(photo => new { photo.OrganizationId, photo.StorageKey }).IsUnique();
             entity.HasOne<Property>().WithMany().HasForeignKey(photo => photo.PropertyId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<BillingCycle>().WithMany().HasForeignKey(photo => photo.BillingCycleId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<BillingUnitBill>().WithMany().HasForeignKey(photo => photo.BillingUnitBillId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<Unit>().WithMany().HasForeignKey(photo => photo.UnitId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<UtilityAccount>(entity =>
+        {
+            entity.ToTable("utility_accounts");
+            entity.HasKey(account => account.Id);
+            entity.Property(account => account.ProviderName).HasMaxLength(200).IsRequired();
+            entity.Property(account => account.CustomerNumber).HasMaxLength(80).IsRequired();
+            entity.Property(account => account.DisplayLabel).HasMaxLength(120);
+            entity.HasIndex(account => new { account.OrganizationId, account.PropertyId });
+            entity.HasOne<Property>().WithMany().HasForeignKey(account => account.PropertyId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UtilityMainMeter>(entity =>
+        {
+            entity.ToTable("utility_main_meters");
+            entity.HasKey(meter => meter.Id);
+            entity.Property(meter => meter.MeterNumber).HasMaxLength(80).IsRequired();
+            entity.Property(meter => meter.DisplayLabel).HasMaxLength(120);
+            entity.HasIndex(meter => new { meter.OrganizationId, meter.PropertyId });
+            entity.HasIndex(meter => new { meter.OrganizationId, meter.UtilityAccountId });
+            entity.HasOne<UtilityAccount>().WithMany().HasForeignKey(meter => meter.UtilityAccountId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Property>().WithMany().HasForeignKey(meter => meter.PropertyId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MeterInstallation>(entity =>
+        {
+            entity.ToTable("meter_installations");
+            entity.HasKey(installation => installation.Id);
+            entity.Property(installation => installation.SerialNumber).HasMaxLength(120);
+            entity.Property(installation => installation.DisplayLabel).HasMaxLength(120);
+            entity.Property(installation => installation.InstallationDate).HasColumnType("date");
+            entity.Property(installation => installation.OpeningReading).HasPrecision(18, 4);
+            entity.Property(installation => installation.OpeningReadingDate).HasColumnType("date");
+            entity.Property(installation => installation.EndedOn).HasColumnType("date");
+            entity.Property(installation => installation.EndReason).HasMaxLength(300);
+            entity.Property(installation => installation.FinalReading).HasPrecision(18, 4);
+            entity.Property(installation => installation.Version).IsConcurrencyToken();
+            entity.HasIndex(installation => new { installation.OrganizationId, installation.PropertyId, installation.UnitId });
+            entity.HasIndex(installation => installation.UnitId)
+                .IsUnique()
+                .HasFilter("\"EndedOn\" IS NULL")
+                .HasDatabaseName("IX_meter_installations_active_unit");
+            entity.HasOne<Property>().WithMany().HasForeignKey(installation => installation.PropertyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Unit>().WithMany().HasForeignKey(installation => installation.UnitId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<UtilityMainMeter>().WithMany().HasForeignKey(installation => installation.MainMeterId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<BillingMeterSegment>(entity =>
+        {
+            entity.ToTable("billing_meter_segments");
+            entity.HasKey(segment => segment.Id);
+            entity.Property(segment => segment.PreviousReadingSource).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(segment => segment.PreviousReading).HasPrecision(18, 4);
+            entity.Property(segment => segment.PreviousReadingDate).HasColumnType("date");
+            entity.Property(segment => segment.CurrentReading).HasPrecision(18, 4);
+            entity.Property(segment => segment.CurrentReadingDate).HasColumnType("date");
+            entity.Property(segment => segment.ConsumptionUnits).HasPrecision(18, 4);
+            entity.Property(segment => segment.SegmentStartDate).HasColumnType("date");
+            entity.Property(segment => segment.SegmentEndDate).HasColumnType("date");
+            entity.HasIndex(segment => new { segment.OrganizationId, segment.BillingChargeLineId });
+            entity.HasOne<BillingChargeLine>().WithMany().HasForeignKey(segment => segment.BillingChargeLineId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MeterInstallationAuditEntry>(entity =>
+        {
+            entity.ToTable("meter_installation_audit_entries");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.Action).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(audit => audit.ReplacementDate).HasColumnType("date");
+            entity.Property(audit => audit.Reason).HasMaxLength(500);
+            entity.Property(audit => audit.BeforeJson).HasColumnType("text");
+            entity.Property(audit => audit.AfterJson).HasColumnType("text");
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.InstallationId, audit.OccurredAtUtc });
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.SubmissionKey }).IsUnique();
+            entity.HasOne<Property>().WithMany().HasForeignKey(audit => audit.PropertyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Unit>().WithMany().HasForeignKey(audit => audit.UnitId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

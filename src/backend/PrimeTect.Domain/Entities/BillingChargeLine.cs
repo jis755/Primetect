@@ -73,6 +73,10 @@ public sealed class BillingChargeLine
 
     public Guid? MeterPhotoId { get; private set; }
 
+    public Guid? MeterInstallationId { get; private set; }
+
+    public void SetMeterInstallation(Guid? meterInstallationId) => MeterInstallationId = meterInstallationId;
+
     public void SetMeterReadings(
         decimal? previousReading,
         DateOnly? previousReadingDate,

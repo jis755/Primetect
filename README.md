@@ -361,7 +361,7 @@ Run these commands one at a time to limit memory use. The normal API workflow te
 
 ### Disposable PostgreSQL verification
 
-The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all eleven committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
+The PostgreSQL-specific tests are opt-in and refuse ordinary application connection strings. They require `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` to target a local server (`localhost`, `127.0.0.1`, or `::1`) and the administrative database `postgres` or `template1`. The fixture then creates a random `primetect_verification_<guid>` database, applies all twelve committed migrations from empty, runs the integration tests, and drops only that generated database. It never resets or drops `primetect` or any other database.
 
 PowerShell example (use a local password only; do not put this value in a tracked file):
 
@@ -503,7 +503,7 @@ The selected billing month is the month in which the bill is issued. Meter consu
 
 Electricity amount is rounded to two decimal places using the existing away-from-zero money rule. A low-bill warning is informational only and appears strictly below the effective threshold; the initial default is Tk200, so Tk199 warns while Tk200 does not. It never adds a minimum fee and does not block approval.
 
-The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, `RoomMeterIssues`, `FeedbackReportsAndNotifications`, and `FeedbackSubmissionIdempotency` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
+The EF Core migrations `InitialPrimeTect`, `MonthlyBillingMilestone`, `PrintableBillingReports`, `ConfigurableElectricityWarningsAndReadingDates`, `ManualCollectionReporting`, `ConfigurableOrganizationPermissions`, `PropertyTimeZone`, `RoomMeterIssues`, `FeedbackReportsAndNotifications`, `FeedbackSubmissionIdempotency`, `QrMeterPhotosAndLocations`, and `UtilityAccountsMainMetersAndSubmeters` are committed for the dedicated PrimeTect database, but this repository does not apply migrations automatically. Their applied status is **unknown** until verified separately against the local `primetect` database before manual use. The opt-in PostgreSQL tests use a newly created disposable database; they do not change the applied-status claim for the local `primetect` database. Printable reports never substitute current property/floor/tenant data for missing historical snapshot fields.
 
 ### Simplified workspace navigation
 
@@ -676,6 +676,84 @@ Blocked and not verified here:
   photo upload) were replaced with synthetic request interception so the
   existing demo database stayed unchanged; the guarded disposable-database
   workflow was not invoked because no backend persistence or contract changed.
+
+## Utility accounts, shared main meters, and safe submeter replacement
+
+This milestone separates the shared incoming electricity supply from the room billing
+submeters and adds a safe replacement workflow. It is additive: units without a submeter
+installation keep their existing behaviour, and customer/account details are never required
+for ordinary room billing.
+
+### Data model and setup
+
+- **Utility account** (Admin): provider name, customer/account number (stored as text so
+  leading zeros survive), and an optional display label, scoped to one property.
+- **Shared main meter** (Admin): a meter number (text), optional label and install date,
+  linked to one utility account, with an active/ended history. One main meter can supply
+  many rooms.
+- **Room submeter installation** (Admin): one active electricity submeter per unit, with an
+  optional serial number and display label, an optional parent main meter, an installation
+  date, an opening reading/date, and an ordered replacement history. A room submeter may be
+  saved without a known parent main meter.
+- Existing units are adopted explicitly: leaving the serial/installation date blank records
+  the identity as **unknown** rather than inventing one, and adoption reuses the valid
+  baseline without resetting consumption.
+
+Setup lives under **Utility Bills → Electricity → Meter Setup** and is Admin-only
+(`/api/properties/{id}/meter-setup`, `.../utility-accounts`, `.../utility-main-meters`,
+`.../meter-installations`). Customer/account numbers are never returned by public QR
+responses.
+
+### Replacement calculation
+
+A replacement atomically ends the previous installation (recording its final reading when
+available) and creates the replacement installation with its opening baseline, plus an
+audit event. Consumption is calculated **per installation segment** and never by subtracting
+across two meters:
+
+- Old segment: 10020 → 10040 = 20 units.
+- New segment: 35 → 50 = 15 units.
+- Combined period: 20 + 15 = 35 units, only when both segments are fully recorded.
+
+A new meter may start at `0` or any other non-negative value; zero is stored distinctly
+from a missing opening. Rates, rounding, warning logic, review workflow, and immutable
+approved snapshots are reused unchanged; no prorated tariff is introduced. Approved billing
+statements and the cycle response now also carry the replacement segments and the submeter
+label.
+
+### Guardrails and unresolved periods
+
+- Replacements are **Admin-only**, organization/property scoped, concurrency-guarded
+  (`expectedInstallationVersion`), and idempotent (`submissionKey`).
+- A replacement that would reinterpret an approved month is rejected, and a **submitted**
+  month must be returned for correction first. A draft/returned month is recalculated and
+  requires re-review.
+- One active submeter per unit is enforced by a filtered unique index; overlapping or
+  backdated installations are rejected.
+- If the previous meter's final reading is **unavailable**, the replacement and the new
+  baseline are preserved but the affected period is review-blocked with a clear message in
+  staff and admin views. No consumption is estimated, assumed zero, or approved.
+- Old readings, photos, bills, and assignments are never deleted or overwritten.
+- Readings and photos saved for a room are associated with the submeter installation in
+  effect when captured. After a replacement, a photo captured for the previous meter is
+  rejected with a recoverable message instead of being attached to the replacement.
+
+### Verification (2026-10-12)
+
+- Frontend: `npm run test:ui` (14 passed), `npm run typecheck`, `npm run build`.
+- Backend: `dotnet build -c Release`; `dotnet test -c Release` (35 passed, 10 skipped).
+- Guarded PostgreSQL suite (`PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION` targeting a local
+  `postgres` admin database): 10 passed. The fixture creates a random
+  `primetect_verification_<guid>` database, applies all **twelve** committed migrations, and
+  drops only that database. It includes a real HTTP replacement workflow proving two
+  persisted segments (20 + 15 = 35) and the unique active-submeter index.
+- No existing demo serves the new version: the running demo API is an older build and its
+  database has not had the new migration applied, so it is deliberately not restarted
+  against the unapplied schema. The frontend dev server serves the current source but talks
+  to that older API.
+
+The new migration is `20261011213752_UtilityAccountsMainMetersAndSubmeters`. Do not apply it
+to `primetect` or an existing demo; use a fresh disposable database.
 
 ## npm audit review
 

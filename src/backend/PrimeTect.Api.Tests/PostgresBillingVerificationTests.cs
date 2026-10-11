@@ -89,9 +89,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 11 || pending.Any())
+            if (applied.Count() != 12 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected eleven applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected twelve applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)
@@ -292,13 +292,122 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(11L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(12L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "ConsumptionUnits"));
         Assert.Equal((18, 2), await NumericDefinitionAsync(connection, "billing_charge_lines", "Amount"));
         Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'billing_cycles' AND indexname = 'IX_billing_cycles_OrganizationId_PropertyId_BillingMonth' AND indexdef LIKE '%UNIQUE%'"));
+    }
+
+    [PostgresFact]
+    public async Task Meter_installation_schema_enforces_one_active_submeter_and_segment_precision()
+    {
+        RequirePostgres();
+
+        await using var connection = await database.OpenConnectionAsync();
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'utility_accounts'"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'utility_main_meters'"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'meter_installations'"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'billing_meter_segments'"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'meter_installation_audit_entries'"));
+
+        // One active submeter per room is enforced by a unique filtered index.
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'meter_installations' AND indexname = 'IX_meter_installations_active_unit' AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%EndedOn%' AND indexdef LIKE '%IS NULL%'"));
+        // Replacement idempotency is enforced by a unique submission-key index.
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'meter_installation_audit_entries' AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%SubmissionKey%'"));
+
+        Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "meter_installations", "OpeningReading"));
+        Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_meter_segments", "PreviousReading"));
+        Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_meter_segments", "ConsumptionUnits"));
+    }
+
+    [PostgresFact]
+    public async Task PostgreSQL_replacement_segments_persist_without_cross_meter_subtraction()
+    {
+        RequirePostgres();
+
+        using var api = new PostgresPrimeTectApiFactory(database.ConnectionString);
+        using var admin = api.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        await RegisterAsync(admin, $"metering-pg-admin-{suffix}@example.test", "Metering PostgreSQL Admin");
+
+        var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Metering Property {suffix}",
+            address = "1 Meter Street",
+            propertyType = "ApartmentBuilding",
+            timeZoneId = "Asia/Dhaka",
+            floors = new[] { new { name = "Ground", unitCount = 1, unitNames = new[] { "1A" } } },
+        }));
+        var unit = property.Floors.Single().Units.Single();
+        await PutChargesAsync(admin, property.Id, new[] { new { chargeType = "Electricity", mode = "Custom", billingMonth = "2025-12-01", amount = (decimal?)10m, customLabel = (string?)null } });
+        var tenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = "PG Meter Tenant", phone = (string?)null }));
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unit.Id}/occupancy", new { tenantId = tenant.Id, startDate = "2025-12-01", endDate = (string?)null })).StatusCode);
+
+        var installation = await ReadAsync<MeterInstallationPgResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/meter-installations", new
+        {
+            unitId = unit.Id,
+            mainMeterId = (Guid?)null,
+            serialNumber = "PG-SUB",
+            displayLabel = (string?)null,
+            installationDate = "2025-12-01",
+            openingReading = (decimal?)10000m,
+            openingReadingDate = "2025-12-01",
+            identityKnown = true,
+            reason = "Adopt existing submeter",
+        }));
+
+        var january = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-01-01" }));
+        var janSaved = await ReadAsync<BillingCycleResponse>(await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{january.Id}/meter-readings", new
+        {
+            expectedVersion = january.Version,
+            reason = "January reading",
+            entries = new[] { new { unitBillId = january.Bills.Single().Id, previousReading = (decimal?)null, currentReading = (decimal?)10020m, previousReadingDate = (string?)null, currentReadingDate = "2026-01-31" } },
+        }));
+
+        var invitation = await ReadAsync<InvitationResponse>(await admin.PostAsJsonAsync("/api/staff/invitations", new { email = $"metering-pg-approver-{suffix}@example.test", role = "Admin" }));
+        using var approver = api.CreateClient();
+        await AcceptInvitationAsync(approver, invitation.InvitationToken, "Metering PostgreSQL Approver");
+        var janSubmitted = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{janSaved.Id}/submit", new { expectedVersion = janSaved.Version }));
+        var janApproved = await ReadAsync<BillingCycleResponse>(await approver.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{janSaved.Id}/approve", new { expectedVersion = janSubmitted.Version }));
+        Assert.Equal(BillingCycleStatus.Approved, janApproved.Status);
+
+        var replacement = await ReadAsync<MeterReplacementPgResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/meter-installations/{installation.Id}/replace", new
+        {
+            expectedInstallationVersion = installation.Version,
+            replacementOccurredAtUtc = "2026-02-10T03:00:00+00:00",
+            reason = "Display failed",
+            oldFinalReading = (decimal?)10040m,
+            oldFinalReadingUnavailable = false,
+            newSerialNumber = "PG-NEW",
+            newDisplayLabel = (string?)null,
+            newOpeningReading = 35m,
+            newMainMeterId = (Guid?)null,
+            submissionKey = Guid.NewGuid(),
+        }));
+        Assert.Equal("2026-02-10", replacement.PropertyLocalDate);
+
+        var february = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-02-01" }));
+        var febSaved = await ReadAsync<BillingCycleResponse>(await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{february.Id}/meter-readings", new
+        {
+            expectedVersion = february.Version,
+            reason = "February reading",
+            entries = new[] { new { unitBillId = february.Bills.Single().Id, previousReading = (decimal?)null, currentReading = (decimal?)50m, previousReadingDate = (string?)null, currentReadingDate = "2026-02-28" } },
+        }));
+        var electricity = febSaved.Bills.Single().Charges.Single();
+        Assert.Equal(35m, electricity.ConsumptionUnits);
+        Assert.Equal(350m, electricity.Amount);
+        Assert.Equal(2, electricity.Segments!.Count);
+        Assert.Equal(20m, electricity.Segments!.Single(segment => segment.SortOrder == 0).ConsumptionUnits);
+        Assert.Equal(15m, electricity.Segments!.Single(segment => segment.SortOrder == 1).ConsumptionUnits);
+        Assert.Equal(35m, electricity.Segments!.Single(segment => segment.SortOrder == 1).PreviousReading);
+
+        await using var connection = await database.OpenConnectionAsync();
+        Assert.Equal(2L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM billing_meter_segments WHERE \"BillingChargeLineId\" = '{electricity.Id}'"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM meter_installations WHERE \"UnitId\" = '{unit.Id}' AND \"EndedOn\" IS NULL"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM meter_installation_audit_entries WHERE \"PreviousInstallationId\" = '{installation.Id}'"));
     }
 
     [PostgresFact]
@@ -1162,7 +1271,13 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
 
     private sealed record BillingUnitBillResponse(Guid Id, Guid UnitId, string UnitName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, DateOnly? OccupancyStartDate, DateOnly? OccupancyEndDate, string? BlockingReason, decimal Total, bool ElectricityWarning, List<BillingChargeLineResponse> Charges);
 
-    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, bool WarningEnabled, decimal? WarningThreshold, decimal Amount);
+    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, bool WarningEnabled, decimal? WarningThreshold, decimal Amount, Guid? MeterInstallationId = null, List<BillingMeterSegmentPgResponse>? Segments = null, string? MeterLabel = null);
+
+    private sealed record BillingMeterSegmentPgResponse(Guid? MeterInstallationId, int SortOrder, decimal? PreviousReading, MeterReadingSource PreviousReadingSource, decimal? CurrentReading, decimal? ConsumptionUnits, bool FinalReadingUnavailable);
+
+    private sealed record MeterInstallationPgResponse(Guid Id, Guid PropertyId, Guid UnitId, string UnitName, Guid? MainMeterId, string? SerialNumber, string? DisplayLabel, DateOnly? InstallationDate, decimal? OpeningReading, DateOnly? OpeningReadingDate, Guid? ReplacedInstallationId, bool IdentityKnown, DateOnly? EndedOn, string? EndReason, decimal? FinalReading, bool FinalReadingUnavailable, bool IsActive, long Version, DateTimeOffset CreatedAtUtc);
+
+    private sealed record MeterReplacementPgResponse(Guid PreviousInstallationId, MeterInstallationPgResponse NewInstallation, DateTimeOffset ReplacementOccurredAtUtc, string PropertyLocalDate, bool AffectedDraftRecalculated, string? BlockingMessage);
 
     private sealed record BillingAuditResponse(Guid Id, Guid ActorUserId, BillingAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
 
