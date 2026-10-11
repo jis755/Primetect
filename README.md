@@ -607,6 +607,76 @@ Manual usability checklist:
 4. Report a room/meter problem without entering a reading, then open **View all rooms** and confirm the issue indicator and non-metered **Not applicable** rows.
 5. As Finance, review/return a collection; as Admin, inspect the property overview, incomplete coverage notice, billing review, collection review, issue view, and responsive layout at a narrow width.
 
+## Browser verification (2026-10-12)
+
+Automated UI verification ran against the running QR/photo demo pair with
+Playwright (Chromium 156, headless, one worker, checks run sequentially). The
+frontend on `http://127.0.0.1:3014` served current `main` source with
+`NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:5014`, and the API on
+`http://127.0.0.1:5014` served the current backend build against only the
+synthetic demo database `primetect_demo_qr_photo_20261011_af21907c`. No
+migration was applied and no demo data was changed. The frontend process on
+3014 was restarted once because an earlier production build had replaced its
+`.next` dev cache; only that confirmed PrimeTect process was stopped.
+
+All 17 checks passed:
+
+- Staff **My Work** dashboard at 1440x900 and 390x844: four permission-driven
+  cards, one explicit property/month context, notification-bell and language
+  controls, and bottom navigation hidden on desktop and visible on mobile with
+  48px targets and no horizontal overflow.
+- Permission-driven surfaces: Finance sees only the collection/reversal review
+  queue and no Electricity Reading card; the notification bell renders only for
+  recipients with review permission (Admin) and is hidden for the demo Staff
+  account, which has no review permission.
+- Two assigned properties (synthetic mock of the properties response) require an
+  explicit selection: the placeholder stays empty and the task card does not
+  navigate until a property is chosen.
+- Property and billing month are preserved when moving between My Work and the
+  Electricity Reading screen and back.
+- Switching বাংলা/English mid-entry keeps the typed reading; Bangla text wraps
+  with 0px horizontal overflow at 390px.
+- The previous reading shows the large bold value (`10020 kWh`, 36px/900) with
+  the correct **Previous approved reading** (2026-11), **Opening reading**
+  (manager, Annex) and **Previous reading unavailable** (`—`) states.
+- Decimal and Bangla-digit entry (`10020.5`, `১০০২০.৫`) normalize to `10020.5`.
+- Meter photo upload (synthetic), explicit **Use suggestion**, manual
+  correction, confirmation reset, and save blocking without confirmation were
+  exercised; the upload and the successful save were fulfilled by synthetic
+  request interception so the demo database was not written. A real failed save
+  (aborted request) preserved the input and did not advance, and the synthetic
+  successful save advanced without any unsaved-change prompt.
+- **Monthly submission** is hidden on My Work and in the focused room screen and
+  appears only after **View all rooms** is opened.
+- Staff collection reporting keeps its own report tab while the **Review
+  reports** approval tab stays disabled for the Staff account.
+- The Feedback / Report form keeps the current room as a locked **selected from
+  this room** context.
+
+Screenshots from the synthetic demo are under `%TEMP%\pt-verify\shots`
+(workstation-local; not committed).
+
+Defects fixed in this milestone:
+
+- The electricity entry's room QR affordance read like an inactive scanner. It
+  now shows the honest bilingual instruction **Use your phone camera to scan the
+  room QR / রুম QR স্ক্যান করতে ফোনের ক্যামেরা ব্যবহার করুন।** and is not styled
+  as a control.
+- The full workspace header did not wrap at narrow widths and overflowed
+  horizontally in Bangla (up to 180px at 390px). It now wraps with mobile
+  padding, so Bangla and English both render without horizontal overflow.
+- Monthly submission was rendered under the reading screen even before **View
+  all rooms** was opened; it now appears only after the overview is opened.
+
+Blocked and not verified here:
+
+- Real-phone camera capture, QR scanning on another device, and real-meter OCR
+  accuracy still require a reachable device and a real meter.
+- Real writes to the demo (a server Save & Next, a month submission, and a real
+  photo upload) were replaced with synthetic request interception so the
+  existing demo database stayed unchanged; the guarded disposable-database
+  workflow was not invoked because no backend persistence or contract changed.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:
@@ -739,7 +809,7 @@ To stop only this pair, inspect the listeners first with `Get-NetTCPConnection -
 
 The new demo includes two properties with separate assignments, unequal floors, units `2A` and `6B`, metered and fixed-charge-only units, a named tenant assigned to both `2A` and `6B`, an occupancy without name or phone, explicit opening readings, draft/returned/submitted/approved examples, optional coordinates, and synthetic private photo evidence. API smoke verification confirmed QR resolution with an explicit month, rotation/revocation, assignment isolation, manual photo save/retrieval, normalized JPEG bytes without EXIF, unavailable OCR, wrong-cycle photo rejection, approved-reading immutability, optional coordinates, and tenant current-assignment preservation.
 
-Supported upload formats are JPEG, PNG, and WebP. HEIC is intentionally unsupported. The normalized source is not byte-for-byte original; its orientation is applied and identifying metadata is removed. OCR remains unavailable and no suggestion is fabricated. Real camera capture, QR scanning on another device, and visual responsive verification remain pending because no browser runtime was available in this environment.
+Supported upload formats are JPEG, PNG, and WebP. HEIC is intentionally unsupported. The normalized source is not byte-for-byte original; its orientation is applied and identifying metadata is removed. OCR remains unavailable and no suggestion is fabricated. The desktop/mobile responsive layout, Bangla wrapping, and the dashboard/entry/overview flows were later verified with headless Playwright against the 3014/5014 pair (see **Browser verification (2026-10-12)**). Real camera capture, QR scanning on another device, and real-meter OCR accuracy still require a reachable device and a real meter.
 
 ### Short bilingual manual checklist
 
