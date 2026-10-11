@@ -546,9 +546,39 @@ normalization, and current-remaining-balance amount rules. It runs separately fr
 
 The simplified staff/manager home now keeps the selected property and billing month in one shared context. The property picker is hidden when only one assigned property is available. Reading progress is loaded from the existing `meter-overview` endpoint and counts only applicable metered units; saved drafts, submitted cycles, returned corrections, and approved cycles remain separate. **View all rooms** and **Open unfinished rooms** keep the selected property and month rather than falling back to the first property.
 
+### Mobile staff dashboard and electricity entry
+
+**My Work / আমার কাজ** is a mobile-first staff dashboard with the existing
+notification bell and persistent language switch, explicit property/month
+selection, permission-driven Electricity Reading, Report Money Received,
+Feedback / Report, and View All Rooms actions, plus Home / Rooms / Account
+bottom navigation on narrow screens. The bottom navigation stays available on
+the staff meter-reading and collection task screens, not only on Home. It does
+not select a first property when more than one assignment is available.
+Reading progress uses the existing meter overview: only applicable metered
+rooms count, loading/errors never show invented zeroes, and unfinished opens
+the filtered room overview with the same property/month context.
+
+Reading navigation is grouped as **Utility Bills / ইউটিলিটি বিল** with the
+active **Electricity / বিদ্যুৎ** workflow. Fixed water, gas, service charges,
+and billing reports remain existing billing features; this does not introduce
+water/gas meter entry.
+
+The focused electricity room screen keeps the existing lifecycle and photo/QR
+protections while showing a large room heading and month context, a large bold
+previous reading with its distinct approved, opening, or unavailable state and
+the available previous reading date, a large decimal-capable current input,
+optional meter photo/OCR evidence, calculation details, warning, and Save &
+Next Room. A room QR identifies a room; a meter photo is separate evidence and
+the two are labelled separately. OCR remains an explicit editable suggestion
+and no photo or suggestion can save, submit, approve, or bill automatically.
+A meter photo requires the explicit reading confirmation before saving, and a
+failed save never advances to the next room. Monthly submission remains only
+in View All Rooms and continues to rely on server eligibility checks.
+
 The Admin home uses the existing per-property collection, meter-overview, and room/meter-issue endpoints. It summarizes approved billed totals, approved manual receipts net of approved reversals, confirmed outstanding balances, and pending reported receipts separately. Missing or unapproved billing coverage is labeled incomplete rather than treated as zero. Because there is no aggregate dashboard API in this milestone, the Admin overview loads one aggregate request per property (not one request per unit); larger organizations may need a future server-side aggregate endpoint for faster loading. Property-specific attention buttons always identify the property before opening rooms, reviews, or issues.
 
-The UI tests cover the applicable-unit denominator, distinct draft/review/approved states, save-before-advance behavior, failed-save draft preservation, Bangla numeric normalization, and current remaining-balance rules. Run checks sequentially:
+The UI tests cover the applicable-unit denominator, distinct draft/review/approved states, permission-driven staff task cards, workflow-context preservation across language changes, distinct approved/opening/unavailable previous-reading labels, explicit meter-photo confirmation, save-before-advance behavior, failed-save draft preservation and no-advance-on-failure, Bangla numeric normalization, monthly-submission placement, and current remaining-balance rules. Run checks sequentially:
 
 ```powershell
 Push-Location src/frontend

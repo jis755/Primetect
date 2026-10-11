@@ -67,3 +67,16 @@ export function adoptMeterOcrSuggestion(suggestion: number) {
 export function isCurrentMeterPhotoResult(requestId: number, currentRequestId: number, returnedCycleId: string, expectedCycleId: string, returnedBillId: string, expectedBillId: string) {
   return requestId === currentRequestId && returnedCycleId === expectedCycleId && returnedBillId === expectedBillId;
 }
+
+export function meterPreviousReadingState(reading: number | null, source: "ApprovedPeriod" | "OpeningEntry" | "Missing", date: string | null) {
+  if (reading === null) return { kind: "unavailable" as const, date: null };
+  return { kind: source === "OpeningEntry" ? "opening" as const : "approved" as const, date };
+}
+
+export function meterPhotoConfirmationRequired(hasPhoto: boolean, confirmed: boolean) {
+  return hasPhoto && !confirmed;
+}
+
+export function meterRoomAdvanceAfterSave(saved: boolean, currentIndex: number, roomCount: number, unfinishedOnly: boolean) {
+  return saved ? nextMeterRoomIndex(currentIndex, roomCount, unfinishedOnly) : nextMeterRoomIndex(currentIndex, roomCount, true);
+}
