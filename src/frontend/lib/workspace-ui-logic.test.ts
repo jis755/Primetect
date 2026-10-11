@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adoptMeterOcrSuggestion, collectionBillDisplay, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, meterSegmentLabel, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, replacementOpeningReadingValid, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
+import { adoptMeterOcrSuggestion, collectionBillDisplay, hasReplacementGuardTranslation, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, meterSegmentLabel, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, replacementGuardMessage, replacementOpeningReadingValid, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
 
 test("room entry advances only after a successful save and stops at the last room", () => {
   assert.equal(nextMeterRoomIndex(0, 3, false), 1);
@@ -108,4 +108,12 @@ test("replacement segments are described per installation and never cross-subtra
   assert.equal(meterSegmentLabel({ sortOrder: 1, previousReading: 35, currentReading: 50, consumptionUnits: 15, finalReadingUnavailable: false }), "15 units");
   assert.equal(meterSegmentLabel({ sortOrder: 0, previousReading: 10020, currentReading: null, consumptionUnits: null, finalReadingUnavailable: true }), "old final reading unavailable");
   assert.equal(meterSegmentLabel({ sortOrder: 1, previousReading: 35, currentReading: null, consumptionUnits: null, finalReadingUnavailable: false }), "incomplete");
+});
+
+test("submitted-month replacement rejection is bilingual", () => {
+  const message = "Return the submitted billing month for correction before replacing this meter.";
+  assert.equal(replacementGuardMessage(message, "en"), message);
+  assert.equal(replacementGuardMessage(message, "bn"), "মিটার প্রতিস্থাপনের আগে পাঠানো বিলের মাস সংশোধনের জন্য ফেরত দিন।");
+  assert.equal(hasReplacementGuardTranslation(message), true);
+  assert.equal(replacementGuardMessage("Some other message", "bn"), "Some other message");
 });

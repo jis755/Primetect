@@ -13,6 +13,9 @@ public sealed class PrimeTectApiFactory : WebApplicationFactory<Program>
 
     public bool FailNextSave { get; set; }
 
+    /// <summary>Private, test-owned meter photo storage root cleaned up by the owning test.</summary>
+    public string PhotoRootPath { get; } = Path.Combine(Path.GetTempPath(), "primetect-tests-photos", Guid.NewGuid().ToString("N"));
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
@@ -23,6 +26,7 @@ public sealed class PrimeTectApiFactory : WebApplicationFactory<Program>
             ["Database:Provider"] = "InMemory",
             ["Database:Name"] = databaseName,
             ["AllowedOrigins:0"] = "http://localhost:3000",
+            ["MeterPhotos:RootPath"] = PhotoRootPath,
         }));
         builder.ConfigureServices(services =>
         {

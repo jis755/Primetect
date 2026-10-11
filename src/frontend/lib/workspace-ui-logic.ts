@@ -96,3 +96,21 @@ export function replacementOpeningReadingValid(raw: string) {
   if (!Number.isFinite(value) || value < 0) return { valid: false as const, reason: "invalid" as const, value: null };
   return { valid: true as const, reason: "ok" as const, value };
 }
+
+const replacementGuardTranslations: Record<string, string> = {
+  "Return the submitted billing month for correction before replacing this meter.": "মিটার প্রতিস্থাপনের আগে পাঠানো বিলের মাস সংশোধনের জন্য ফেরত দিন।",
+  "This replacement date would reinterpret an approved billing period. Choose a date after the last approved month.": "এই প্রতিস্থাপনের তারিখ অনুমোদিত বিলের সময়কে নতুন করে ব্যাখ্যা করবে। শেষ অনুমোদিত মাসের পরে একটি তারিখ বেছে নিন।",
+  "This submeter is no longer the active meter for the room. Refresh before replacing it.": "এই সাবমিটারটি এখন আর এই রুমের সক্রিয় মিটার নয়। প্রতিস্থাপনের আগে নতুন করে লোড করুন।",
+  "This submeter changed since it was loaded. Refresh before replacing it.": "লোড করার পর এই সাবমিটার বদলে গেছে। প্রতিস্থাপনের আগে নতুন করে লোড করুন।",
+  "This meter photo was captured for a replaced meter. Capture a new photo for the current submeter before saving.": "এই ছবিটি প্রতিস্থাপিত মিটারের জন্য তোলা হয়েছিল। সংরক্ষণের আগে বর্তমান সাবমিটারের নতুন ছবি তুলুন।",
+  "The replacement could not be persisted atomically. No change was recorded.": "প্রতিস্থাপন একসাথে সংরক্ষণ করা যায়নি। কোনো পরিবর্তন রেকর্ড হয়নি।",
+};
+
+export function replacementGuardMessage(serverMessage: string, language: "en" | "bn") {
+  if (language === "en") return serverMessage;
+  return replacementGuardTranslations[serverMessage] ?? serverMessage;
+}
+
+export function hasReplacementGuardTranslation(serverMessage: string) {
+  return Object.prototype.hasOwnProperty.call(replacementGuardTranslations, serverMessage);
+}

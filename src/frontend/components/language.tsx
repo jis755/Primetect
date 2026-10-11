@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
+import { replacementGuardMessage } from "@/lib/workspace-ui-logic";
 
 export type Language = "en" | "bn";
 
@@ -49,6 +50,8 @@ export function localizeError(caught: unknown, fallback: string, language: Langu
     if (caught.status === 401) return "আপনার সাইন-ইন সেশন শেষ হয়েছে। আবার সাইন-ইন করুন।";
     if (caught.status === 403 && caught.message.includes("Another authorized person")) return "অন্য একজন অনুমোদিত ব্যক্তি আপনার রিপোর্ট অনুমোদন করবেন।";
     if (caught.status === 403) return "এই কাজটি করার অনুমতি আপনার নেই বা সম্পত্তিটি আপনার জন্য নির্ধারিত নয়।";
+    const specificGuard = replacementGuardMessage(caught.message, language);
+    if (specificGuard !== caught.message) return specificGuard;
     if (caught.status === 409) return "তথ্যটি অন্য কেউ পরিবর্তন করেছেন। নতুন তথ্য লোড করে আবার চেষ্টা করুন।";
     if (caught.status === 503 && caught.message.includes("Room/meter issue storage")) return "রুম বা মিটারের সমস্যা রিপোর্টিং চালু করতে এই ডেটাবেসে প্রয়োজনীয় মাইগ্রেশন লাগবে।";
   }

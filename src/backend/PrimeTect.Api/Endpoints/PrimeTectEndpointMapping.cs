@@ -1394,6 +1394,11 @@ public static class PrimeTectEndpointMapping
             db.MeterInstallationAuditEntries.Add(new MeterInstallationAuditEntry(actor.OrganizationId, propertyId, active.UnitId, replacement.Id, active.Id, actor.UserId,
                 MeterInstallationAuditAction.Replaced, replacementDate, request.Reason, before, after, request.SubmissionKey));
 
+            // Persist the ended old installation and the new one inside the transaction first, so the
+            // affected draft recalculation below reads the replacement from storage rather than the
+            // pre-replacement state. The transaction still rolls back atomically on any failure.
+            await db.SaveChangesAsync(cancellationToken);
+
             string? blocking = null;
             var affectedDraft = affectedCycle is not null && affectedCycle.Status is BillingCycleStatus.Draft or BillingCycleStatus.Returned;
             if (affectedDraft)
@@ -1471,7 +1476,9 @@ public static class PrimeTectEndpointMapping
         Guid? carriedInstallationId,
         DateOnly? carriedDate,
         decimal? activeCurrent,
-        DateOnly? activeCurrentDate)
+        DateOnly? activeCurrentDate,
+        decimal? activeOpeningFallback,
+        DateOnly? activeOpeningFallbackDate)
     {
         if (installations.Count == 0)
         {
@@ -1524,6 +1531,13 @@ public static class PrimeTectEndpointMapping
 
             decimal? current;
             DateOnly? currentDate;
+            if (installation.IsActive && previous is null && activeOpeningFallback is not null)
+            {
+                previous = activeOpeningFallback;
+                source = MeterReadingSource.OpeningEntry;
+                previousDate = activeOpeningFallbackDate;
+            }
+
             if (installation.IsActive)
             {
                 current = activeCurrent;
@@ -1671,7 +1685,7 @@ public static class PrimeTectEndpointMapping
 
             var line = billLines.First(item => item.ChargeType == ChargeType.Electricity);
             var carriedReading = carried.GetValueOrDefault(bill.UnitId);
-            var outcome = PlanMeterSegments(unitInstallations, periodStart, periodEnd, carriedReading.Reading, carriedReading.InstallationId, carriedReading.Date, line.CurrentReading, line.CurrentReadingDate);
+            var outcome = PlanMeterSegments(unitInstallations, periodStart, periodEnd, carriedReading.Reading, carriedReading.InstallationId, carriedReading.Date, line.CurrentReading, line.CurrentReadingDate, line.PreviousReadingSource == MeterReadingSource.OpeningEntry ? line.PreviousReading : null, line.PreviousReadingDate);
             await ApplyMeterSegmentsAsync(db, line, outcome.Segments, cancellationToken);
             ApplySegmentOutcomeToLine(line, outcome);
             RecalculateBillState(bill, billLines, meterSegmentAware: true, meterBlocking: outcome.BlockingReason);
@@ -2489,7 +2503,7 @@ public static class PrimeTectEndpointMapping
                 if (installationsByUnit.TryGetValue(unit.Id, out var unitInstallations) && unitInstallations.Count > 0 && billLines.FirstOrDefault(line => line.IsMetered) is { } meteredLine)
                 {
                     var carried = carriedByUnit.GetValueOrDefault(unit.Id);
-                    var outcome = PlanMeterSegments(unitInstallations, request.BillingMonth, monthEnd, carried.Reading, carried.InstallationId, carried.Date, null, null);
+                    var outcome = PlanMeterSegments(unitInstallations, request.BillingMonth, monthEnd, carried.Reading, carried.InstallationId, carried.Date, null, null, null, null);
                     await ApplyMeterSegmentsAsync(db, meteredLine, outcome.Segments, cancellationToken);
                     ApplySegmentOutcomeToLine(meteredLine, outcome);
                     RecalculateBillState(bill, billLines, meterSegmentAware: true, meterBlocking: outcome.BlockingReason);
@@ -2905,7 +2919,7 @@ public static class PrimeTectEndpointMapping
                 if (installationsByUnit.TryGetValue(unitId, out var unitInstallations) && unitInstallations.Any(item => item.IsActive))
                 {
                     var carried = carriedByUnit.GetValueOrDefault(unitId);
-                    var outcome = PlanMeterSegments(unitInstallations, cycle.BillingMonth, cycle.BillingMonth.AddMonths(1).AddDays(-1), carried.Reading, carried.InstallationId, carried.Date, entry.CurrentReading, entry.CurrentReadingDate);
+                    var outcome = PlanMeterSegments(unitInstallations, cycle.BillingMonth, cycle.BillingMonth.AddMonths(1).AddDays(-1), carried.Reading, carried.InstallationId, carried.Date, entry.CurrentReading, entry.CurrentReadingDate, entry.PreviousReading, entry.PreviousReadingDate);
                     await ApplyMeterSegmentsAsync(db, line, outcome.Segments, cancellationToken);
                     ApplySegmentOutcomeToLine(line, outcome);
                     if (entry.MeterPhotoId is not null)

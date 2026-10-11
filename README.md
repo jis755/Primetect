@@ -755,6 +755,119 @@ label.
 The new migration is `20261011213752_UtilityAccountsMainMetersAndSubmeters`. Do not apply it
 to `primetect` or an existing demo; use a fresh disposable database.
 
+## Fresh utility-metering demo verification (2026-10-12)
+
+A new isolated synthetic PostgreSQL database was created for this milestone:
+`primetect_demo_metering_20261012_ae2595d9`. It is not `primetect` and not an
+earlier demo. All **twelve** committed migrations were applied to it only
+(verified: 12 applied, 0 pending), including
+`20261011213752_UtilityAccountsMainMetersAndSubmeters`.
+
+Ignored local files:
+
+- `src/backend/PrimeTect.Api/appsettings.MeteringDemo.Local.json` — derived
+  connection source/database name, ports, photo root, public base URL, and
+  allowed origins.
+- `src/backend/PrimeTect.Api/metering-demo.credentials.secret.json` — synthetic
+  Admin, Staff, and Finance credentials. Do not print, commit, or copy the
+  passwords. View locally with
+  `Get-Content src/backend/PrimeTect.Api/metering-demo.credentials.secret.json`.
+- `src/backend/PrimeTect.Api/App_Data/metering-demo-*` — private synthetic photo
+  storage (ignored, not served as static content).
+
+Verified running pair:
+
+- Frontend: `http://127.0.0.1:3021`
+- API: `http://127.0.0.1:5021` (`/api/health`)
+
+The API runs the current Release build with `ASPNETCORE_ENVIRONMENT=Demo`
+(ephemeral data-protection keys) against only the new database. The frontend runs
+the current source from an isolated copy under `%TEMP%\primetect-fe-3021` so the
+pre-existing `3014`/`5000` demos keep their own `.next` cache.
+
+Synthetic content: one utility account with customer number `0012345` (leading
+zero preserved), one main meter `00998877` supplying eight rooms, a standalone
+room submeter without a parent main meter, one legacy submeter whose identity is
+unknown, a January 2026 approved baseline, and a February 2026 draft showing a
+replacement opening at `35` and at `0` (each a complete 20 + 15 = 35-unit
+two-segment period) plus one replacement whose old final reading is unavailable
+and therefore review-blocks the period. A second property (`Metering Demo Annex`)
+has a February cycle left **Submitted** to exercise the submitted-month guard.
+Separate Admin, Building Staff, and Finance Manager accounts are created.
+
+### Startup / shutdown
+
+Restart the API (derive the connection in memory; never print the password):
+
+```powershell
+$local = Get-Content src/backend/PrimeTect.Api/appsettings.MeteringDemo.Local.json | ConvertFrom-Json
+$source = [string](Get-Content (Join-Path src/backend/PrimeTect.Api $local.ConnectionSource) | ConvertFrom-Json).ConnectionStrings.PrimeTectDatabase
+$env:ASPNETCORE_ENVIRONMENT = 'Demo'
+$env:Database__Provider = 'PostgreSQL'
+$env:ConnectionStrings__PrimeTectDatabase = ($source -replace '(?i)(Database|Initial Catalog)=[^;]+', "Database=$($local.ConnectionDatabase)")
+$env:AllowedOrigins__0 = [string]$local.AllowedOrigins[0]
+$env:AllowedOrigins__1 = [string]$local.AllowedOrigins[1]
+$env:PublicAppBaseUrl = [string]$local.PublicAppBaseUrl
+$env:MeterPhotos__RootPath = Join-Path (Resolve-Path src/backend/PrimeTect.Api).Path ([string]$local.MeterPhotos.RootPath)
+dotnet run --no-build -c Release --no-launch-profile --project src/backend/PrimeTect.Api --urls http://127.0.0.1:5021
+```
+
+Restart the frontend from the isolated copy:
+
+```powershell
+$copy = Join-Path $env:TEMP 'primetect-fe-3021'
+$env:NEXT_PUBLIC_API_BASE_URL = 'http://127.0.0.1:5021'
+Set-Location $copy
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3021
+```
+
+Stop only the confirmed PrimeTect `5021`/`3021` processes
+(`Get-NetTCPConnection -LocalPort 5021,3021 -State Listen`). Do not stop the
+pre-existing `5014`/`3014` demo or the unrelated port-3000 app. The demo database
+is a fresh disposable database; remove it only if it is no longer needed.
+
+### Stale-photo HTTP test and defect fixed
+
+An HTTP integration test now uploads a real synthetic meter photo through the
+actual endpoint, replaces the submeter with an authorized Admin, attempts to save
+the stale reading/photo context, and verifies rejection with no change to
+readings, bills, photo associations, or history, then uploads a fresh photo and
+saves successfully. It runs both in the default InMemory suite and in the guarded
+PostgreSQL suite (real persistence, isolated private photo storage that the test
+deletes). This exposed a real defect: the in-transaction draft recalculation
+during replacement queried storage before the new installation was persisted, so
+the replaced room kept the old meter's previous reading (and a later save
+reported negative consumption). The replacement now persists the ended and new
+installations inside the transaction before recalculating the affected draft. A
+second fix lets an adopted submeter whose identity/opening is unknown accept the
+opening reading entered through the billing entry instead of silently blocking.
+
+### Browser verification (2026-10-12)
+
+Playwright (one worker, sequential) ran seven real-persistence checks against
+only the new `3021`/`5021` demo — no successful mutation responses were mocked:
+
+1. Admin meter setup shows the utility account `0012345` (leading zero), the main
+   meter `00998877`, and the unknown-identity legacy submeter.
+2. Replacement segments persist: U-01 and U-02 each show two segments
+   (20 + 15 = 35), U-02's replacement opening is `0`, and U-03 is review-blocked
+   with the missing-final-reading message; the month submission button is
+   disabled.
+3. A staff reading save persists and reloads (G-01 = 13025, 5 units).
+4. Staff cannot administer: no Meter Setup in the UI, and `/meter-setup` and the
+   replace endpoint return 403.
+5. Billing review is separate: Admin sees the review area, Staff sees no approve
+   action, Finance is review-only, and the approved January statement is
+   unchanged (real HTTP).
+6. A submitted-month replacement is rejected with a clear **bilingual** message
+   (English and Bangla).
+7. Admin setup and the staff dashboard wrap at 390px with no horizontal overflow
+   in English and Bangla.
+
+Screenshots are under `%TEMP%\pt-verify\metering-shots` (workstation-local).
+Desktop browser automation does not verify a real-phone camera, external QR
+scanning, or real-meter OCR accuracy; those still require a real device and meter.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:

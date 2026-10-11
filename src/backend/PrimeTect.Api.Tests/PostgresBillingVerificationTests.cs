@@ -1,5 +1,6 @@
 using System.Data;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -15,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using PrimeTect.Domain.Enums;
 using PrimeTect.Infrastructure.Persistence;
+using SkiaSharp;
 using Xunit;
 
 namespace PrimeTect.Api.Tests;
@@ -216,6 +218,9 @@ public sealed class PostgresPrimeTectApiFactory(string connectionString) : WebAp
 {
     public bool FailNextSave { get; set; }
 
+    /// <summary>Private, test-owned meter photo storage root cleaned up by the owning test.</summary>
+    public string PhotoRootPath { get; } = Path.Combine(Path.GetTempPath(), "primetect-tests-photos", Guid.NewGuid().ToString("N"));
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
@@ -226,6 +231,7 @@ public sealed class PostgresPrimeTectApiFactory(string connectionString) : WebAp
             ["Database:Provider"] = "PostgreSQL",
             ["ConnectionStrings:PrimeTectDatabase"] = connectionString,
             ["AllowedOrigins:0"] = "http://localhost:3000",
+            ["MeterPhotos:RootPath"] = PhotoRootPath,
         }));
         builder.ConfigureServices(services =>
         {
@@ -408,6 +414,149 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal(2L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM billing_meter_segments WHERE \"BillingChargeLineId\" = '{electricity.Id}'"));
         Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM meter_installations WHERE \"UnitId\" = '{unit.Id}' AND \"EndedOn\" IS NULL"));
         Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM meter_installation_audit_entries WHERE \"PreviousInstallationId\" = '{installation.Id}'"));
+    }
+
+    [PostgresFact]
+    public async Task Stale_photo_from_a_replaced_meter_is_rejected_and_a_fresh_photo_saves()
+    {
+        RequirePostgres();
+
+        using var api = new PostgresPrimeTectApiFactory(database.ConnectionString);
+        var photoRoot = api.PhotoRootPath;
+        try
+        {
+            using var admin = api.CreateClient();
+            var suffix = Guid.NewGuid().ToString("N")[..8];
+            await RegisterAsync(admin, $"stale-photo-{suffix}@example.test", "Stale Photo Admin");
+
+            var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+            {
+                name = $"Stale Photo Property {suffix}",
+                address = "2 Meter Street",
+                propertyType = "ApartmentBuilding",
+                timeZoneId = "Asia/Dhaka",
+                floors = new[] { new { name = "Ground", unitCount = 1, unitNames = new[] { "1A" } } },
+            }));
+            var unit = property.Floors.Single().Units.Single();
+            await PutChargesAsync(admin, property.Id, new[] { new { chargeType = "Electricity", mode = "Custom", billingMonth = "2025-12-01", amount = (decimal?)10m, customLabel = (string?)null } });
+            var tenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = "Stale Photo Tenant", phone = (string?)null }));
+            Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unit.Id}/occupancy", new { tenantId = tenant.Id, startDate = "2025-12-01", endDate = (string?)null })).StatusCode);
+
+            var original = await ReadAsync<MeterInstallationPgResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/meter-installations", new
+            {
+                unitId = unit.Id,
+                mainMeterId = (Guid?)null,
+                serialNumber = "ORIGINAL",
+                displayLabel = "Original submeter",
+                installationDate = "2025-12-01",
+                openingReading = (decimal?)10000m,
+                openingReadingDate = "2025-12-01",
+                identityKnown = true,
+                reason = "Adopt original submeter",
+            }));
+
+            var february = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-02-01" }));
+            var billId = february.Bills.Single().Id;
+
+            var csrf = await ReadAsync<CsrfResponse>(await admin.GetAsync("/api/auth/csrf"));
+            var png = BuildPng(64, 64);
+            var originalUpload = await UploadMeterPhotoAsync(admin, csrf.Token, property.Id, february.Id, billId, png);
+            Assert.Equal(HttpStatusCode.Created, originalUpload.StatusCode);
+            var originalPhoto = await ReadAsync<MeterPhotoPgResponse>(originalUpload);
+            Assert.Equal(original.Id, originalPhoto.MeterInstallationId);
+
+            var replacement = await ReadAsync<MeterReplacementPgResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/meter-installations/{original.Id}/replace", new
+            {
+                expectedInstallationVersion = original.Version,
+                replacementOccurredAtUtc = "2026-02-10T03:00:00+00:00",
+                reason = "Display failed",
+                oldFinalReading = (decimal?)10020m,
+                oldFinalReadingUnavailable = false,
+                newSerialNumber = "REPLACEMENT",
+                newDisplayLabel = "Replacement submeter",
+                newOpeningReading = 0m,
+                newMainMeterId = (Guid?)null,
+                submissionKey = Guid.NewGuid(),
+            }));
+            Assert.True(replacement.AffectedDraftRecalculated);
+
+            var afterReplacement = await ReadAsync<BillingCycleResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-cycles/2026-02"));
+            Assert.Null(afterReplacement.Bills.Single().Charges.Single().CurrentReading);
+
+            // A late save carrying the previous meter's photo must be rejected before any change.
+            var stale = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{afterReplacement.Id}/meter-readings", new
+            {
+                expectedVersion = afterReplacement.Version,
+                reason = "stale photo attempt",
+                entries = new[] { new { unitBillId = billId, previousReading = (decimal?)null, currentReading = (decimal?)50m, previousReadingDate = (string?)null, currentReadingDate = "2026-02-28", meterPhotoId = (Guid?)originalPhoto.Id } },
+            });
+            Assert.Equal(HttpStatusCode.BadRequest, stale.StatusCode);
+
+            var unchanged = await ReadAsync<BillingCycleResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-cycles/2026-02"));
+            var unchangedLine = unchanged.Bills.Single().Charges.Single();
+            Assert.Null(unchangedLine.CurrentReading);
+            Assert.Null(unchangedLine.MeterPhotoId);
+            Assert.Equal(unchanged.Version, afterReplacement.Version);
+
+            // A fresh photo for the replacement meter saves with real persistence.
+            var freshUpload = await UploadMeterPhotoAsync(admin, csrf.Token, property.Id, unchanged.Id, billId, png);
+            Assert.Equal(HttpStatusCode.Created, freshUpload.StatusCode);
+            var freshPhoto = await ReadAsync<MeterPhotoPgResponse>(freshUpload);
+            Assert.Equal(replacement.NewInstallation.Id, freshPhoto.MeterInstallationId);
+
+            var savedResponse = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{unchanged.Id}/meter-readings", new
+            {
+                expectedVersion = unchanged.Version,
+                reason = "Replacement meter reading",
+                entries = new[] { new { unitBillId = billId, previousReading = (decimal?)null, currentReading = (decimal?)15m, previousReadingDate = (string?)null, currentReadingDate = "2026-02-28", meterPhotoId = (Guid?)freshPhoto.Id } },
+            });
+            Assert.True(savedResponse.IsSuccessStatusCode, await savedResponse.Content.ReadAsStringAsync());
+            var saved = await ReadAsync<BillingCycleResponse>(savedResponse);
+            var savedLine = saved.Bills.Single().Charges.Single();
+            Assert.Equal(35m, savedLine.ConsumptionUnits);
+            Assert.Equal(2, savedLine.Segments!.Count);
+            Assert.Equal(20m, savedLine.Segments!.Single(segment => segment.SortOrder == 0).ConsumptionUnits);
+            Assert.Equal(15m, savedLine.Segments!.Single(segment => segment.SortOrder == 1).ConsumptionUnits);
+            Assert.Equal(replacement.NewInstallation.Id, savedLine.MeterInstallationId);
+            Assert.Equal(freshPhoto.Id, savedLine.MeterPhotoId);
+
+            await using var connection = await database.OpenConnectionAsync();
+            Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM meter_photos WHERE \"Id\" = '{originalPhoto.Id}' AND \"MeterInstallationId\" = '{original.Id}'"));
+            Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM meter_photos WHERE \"Id\" = '{freshPhoto.Id}' AND \"MeterInstallationId\" = '{replacement.NewInstallation.Id}'"));
+        }
+        finally
+        {
+            if (Directory.Exists(photoRoot))
+            {
+                Directory.Delete(photoRoot, recursive: true);
+            }
+        }
+    }
+
+    private static byte[] BuildPng(int width, int height)
+    {
+        using var bitmap = new SKBitmap(width, height);
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(SKColors.White);
+            using var paint = new SKPaint { Color = SKColors.Black };
+            canvas.DrawRect(8, 8, width - 16, height - 16, paint);
+        }
+
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    private static async Task<HttpResponseMessage> UploadMeterPhotoAsync(HttpClient client, string csrfToken, Guid propertyId, Guid billingCycleId, Guid unitBillId, byte[] png)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(png);
+        file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        form.Add(file, "file", "meter.png");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/properties/{propertyId}/billing-cycles/{billingCycleId}/meter-photos/{unitBillId}") { Content = form };
+        request.Headers.Add("X-CSRF-TOKEN", csrfToken);
+        return await client.SendAsync(request);
     }
 
     [PostgresFact]
@@ -1271,13 +1420,17 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
 
     private sealed record BillingUnitBillResponse(Guid Id, Guid UnitId, string UnitName, Guid? OccupancyAssignmentId, Guid? TenantId, string? TenantName, string? TenantPhone, DateOnly? OccupancyStartDate, DateOnly? OccupancyEndDate, string? BlockingReason, decimal Total, bool ElectricityWarning, List<BillingChargeLineResponse> Charges);
 
-    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, bool WarningEnabled, decimal? WarningThreshold, decimal Amount, Guid? MeterInstallationId = null, List<BillingMeterSegmentPgResponse>? Segments = null, string? MeterLabel = null);
+    private sealed record BillingChargeLineResponse(Guid Id, ChargeType ChargeType, string ChargeName, ChargeSettingMode SettingMode, bool IsMetered, decimal? Rate, decimal? PreviousReading, DateOnly? PreviousReadingDate, decimal? CurrentReading, DateOnly? CurrentReadingDate, decimal? ConsumptionUnits, MeterReadingSource PreviousReadingSource, bool WarningEnabled, decimal? WarningThreshold, decimal Amount, Guid? MeterPhotoId = null, Guid? MeterInstallationId = null, List<BillingMeterSegmentPgResponse>? Segments = null, string? MeterLabel = null);
 
     private sealed record BillingMeterSegmentPgResponse(Guid? MeterInstallationId, int SortOrder, decimal? PreviousReading, MeterReadingSource PreviousReadingSource, decimal? CurrentReading, decimal? ConsumptionUnits, bool FinalReadingUnavailable);
 
     private sealed record MeterInstallationPgResponse(Guid Id, Guid PropertyId, Guid UnitId, string UnitName, Guid? MainMeterId, string? SerialNumber, string? DisplayLabel, DateOnly? InstallationDate, decimal? OpeningReading, DateOnly? OpeningReadingDate, Guid? ReplacedInstallationId, bool IdentityKnown, DateOnly? EndedOn, string? EndReason, decimal? FinalReading, bool FinalReadingUnavailable, bool IsActive, long Version, DateTimeOffset CreatedAtUtc);
 
     private sealed record MeterReplacementPgResponse(Guid PreviousInstallationId, MeterInstallationPgResponse NewInstallation, DateTimeOffset ReplacementOccurredAtUtc, string PropertyLocalDate, bool AffectedDraftRecalculated, string? BlockingMessage);
+
+    private sealed record MeterPhotoPgResponse(Guid Id, Guid PropertyId, Guid UnitId, Guid BillingCycleId, Guid BillingUnitBillId, MeterPhotoStatus Status, bool IsAttached, Guid? MeterInstallationId);
+
+    private sealed record CsrfResponse(string Token);
 
     private sealed record BillingAuditResponse(Guid Id, Guid ActorUserId, BillingAuditAction Action, DateTimeOffset OccurredAtUtc, string? Reason, string? Before, string? After);
 

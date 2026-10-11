@@ -1,8 +1,10 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PrimeTect.Domain.Enums;
+using SkiaSharp;
 using Xunit;
 
 namespace PrimeTect.Api.Tests;
@@ -502,6 +504,151 @@ public sealed class UtilityMeteringTests : IClassFixture<PrimeTectApiFactory>
 
     // ----- helpers -----
 
+    [Fact]
+    public async Task Adopted_unknown_submeter_accepts_an_entered_opening_without_inventing_identity()
+    {
+        using var admin = factory.CreateClient();
+        var (approver, property) = await SetupOrganizationWithApproverAsync(admin, "Unknown Identity");
+        using var approverClient = approver;
+        var unit = property.Floors.Single().Units.Single();
+        await SaveElectricityChargeAsync(admin, property.Id, 10m);
+        await AssignTenantAsync(admin, property.Id, [unit.Id]);
+        var installation = await ReadAsync<MeterInstallationResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/meter-installations", new
+        {
+            unitId = unit.Id,
+            mainMeterId = (Guid?)null,
+            serialNumber = (string?)null,
+            displayLabel = (string?)null,
+            installationDate = (string?)null,
+            openingReading = (decimal?)null,
+            openingReadingDate = (string?)null,
+            identityKnown = false,
+            reason = "Legacy meter identity unknown",
+        }));
+        Assert.False(installation.IdentityKnown);
+        Assert.Null(installation.OpeningReading);
+
+        var january = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-01-01" }));
+        Assert.NotNull(january.Bills.Single().BlockingReason);
+
+        var saved = await ReadAsync<BillingCycleResponse>(await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{january.Id}/meter-readings", new
+        {
+            expectedVersion = january.Version,
+            reason = "Entered opening from documented meter sheet",
+            entries = new[] { new { unitBillId = january.Bills.Single().Id, previousReading = (decimal?)5000m, currentReading = (decimal?)5020m, previousReadingDate = "2026-01-01", currentReadingDate = "2026-01-31" } },
+        }));
+        var line = saved.Bills.Single().Charges.Single();
+        Assert.Equal(20m, line.ConsumptionUnits);
+        Assert.Equal(MeterReadingSource.OpeningEntry, line.PreviousReadingSource);
+        Assert.Equal(5000m, line.PreviousReading);
+        await ApproveAsync(admin, approverClient, property.Id, saved);
+    }
+
+    [Fact]
+    public async Task Stale_photo_from_a_replaced_meter_is_rejected_and_a_fresh_photo_saves_over_http()
+    {
+        using var admin = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        await RegisterOwnerAsync(admin, suffix);
+        var property = await CreatePropertyAsync(admin, $"Stale Photo {suffix}", ["Only"]);
+        var unit = property.Floors.Single().Units.Single();
+        await SaveElectricityChargeAsync(admin, property.Id, 10m);
+        await AssignTenantAsync(admin, property.Id, [unit.Id]);
+        var original = await InstallSubmeterAsync(admin, property.Id, unit.Id, openingReading: 10000m, installationDate: "2025-12-01");
+
+        var february = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-02-01" }));
+        var billId = february.Bills.Single().Id;
+        var csrf = await ReadAsync<CsrfResponse>(await admin.GetAsync("/api/auth/csrf"));
+        var png = BuildPng(64, 64);
+
+        var originalUpload = await UploadMeterPhotoAsync(admin, csrf.Token, property.Id, february.Id, billId, png);
+        Assert.Equal(HttpStatusCode.Created, originalUpload.StatusCode);
+        var originalPhoto = await ReadAsync<MeterPhotoRecord>(originalUpload);
+        Assert.Equal(original.Id, originalPhoto.MeterInstallationId);
+
+        var replacement = await ReadAsync<MeterReplacementResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/meter-installations/{original.Id}/replace", new
+        {
+            expectedInstallationVersion = original.Version,
+            replacementOccurredAtUtc = "2026-02-10T03:00:00+00:00",
+            reason = "Display failed",
+            oldFinalReading = (decimal?)10020m,
+            oldFinalReadingUnavailable = false,
+            newSerialNumber = "REPLACEMENT",
+            newDisplayLabel = (string?)null,
+            newOpeningReading = 0m,
+            newMainMeterId = (Guid?)null,
+            submissionKey = Guid.NewGuid(),
+        }));
+
+        var afterReplacement = await ReadAsync<BillingCycleResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-cycles/2026-02"));
+        Assert.Null(afterReplacement.Bills.Single().Charges.Single().CurrentReading);
+
+        var stale = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{afterReplacement.Id}/meter-readings", new
+        {
+            expectedVersion = afterReplacement.Version,
+            reason = "stale photo attempt",
+            entries = new[] { new { unitBillId = billId, previousReading = (decimal?)null, currentReading = (decimal?)50m, previousReadingDate = (string?)null, currentReadingDate = "2026-02-28", meterPhotoId = (Guid?)originalPhoto.Id } },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, stale.StatusCode);
+
+        var unchanged = await ReadAsync<BillingCycleResponse>(await admin.GetAsync($"/api/properties/{property.Id}/billing-cycles/2026-02"));
+        Assert.Null(unchanged.Bills.Single().Charges.Single().CurrentReading);
+        Assert.Null(unchanged.Bills.Single().Charges.Single().MeterPhotoId);
+        Assert.Equal(afterReplacement.Version, unchanged.Version);
+
+        var freshUpload = await UploadMeterPhotoAsync(admin, csrf.Token, property.Id, unchanged.Id, billId, png);
+        Assert.Equal(HttpStatusCode.Created, freshUpload.StatusCode);
+        var freshPhoto = await ReadAsync<MeterPhotoRecord>(freshUpload);
+        Assert.Equal(replacement.NewInstallation.Id, freshPhoto.MeterInstallationId);
+
+        var savedResponse = await admin.PutAsJsonAsync($"/api/properties/{property.Id}/billing-cycles/{unchanged.Id}/meter-readings", new
+        {
+            expectedVersion = unchanged.Version,
+            reason = "Replacement meter reading",
+            entries = new[] { new { unitBillId = billId, previousReading = (decimal?)null, currentReading = (decimal?)15m, previousReadingDate = (string?)null, currentReadingDate = "2026-02-28", meterPhotoId = (Guid?)freshPhoto.Id } },
+        });
+        Assert.True(savedResponse.IsSuccessStatusCode, await savedResponse.Content.ReadAsStringAsync());
+        var saved = await ReadAsync<BillingCycleResponse>(savedResponse);
+        var savedLine = saved.Bills.Single().Charges.Single();
+        Assert.Equal(35m, savedLine.ConsumptionUnits);
+        Assert.Equal(2, savedLine.Segments!.Count);
+        Assert.Equal(20m, savedLine.Segments!.Single(segment => segment.SortOrder == 0).ConsumptionUnits);
+        Assert.Equal(15m, savedLine.Segments!.Single(segment => segment.SortOrder == 1).ConsumptionUnits);
+        Assert.Equal(replacement.NewInstallation.Id, savedLine.MeterInstallationId);
+        Assert.Equal(freshPhoto.Id, savedLine.MeterPhotoId);
+
+        if (Directory.Exists(factory.PhotoRootPath))
+        {
+            Directory.Delete(factory.PhotoRootPath, recursive: true);
+        }
+    }
+
+    private static byte[] BuildPng(int width, int height)
+    {
+        using var bitmap = new SKBitmap(width, height);
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(SKColors.White);
+            using var paint = new SKPaint { Color = SKColors.Black };
+            canvas.DrawRect(8, 8, width - 16, height - 16, paint);
+        }
+
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    private static async Task<HttpResponseMessage> UploadMeterPhotoAsync(HttpClient client, string csrfToken, Guid propertyId, Guid billingCycleId, Guid unitBillId, byte[] png)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(png);
+        file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        form.Add(file, "file", "meter.png");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/properties/{propertyId}/billing-cycles/{billingCycleId}/meter-photos/{unitBillId}") { Content = form };
+        request.Headers.Add("X-CSRF-TOKEN", csrfToken);
+        return await client.SendAsync(request);
+    }
+
     private async Task<(HttpClient Approver, PropertyResponse Property)> SetupOrganizationWithApproverAsync(HttpClient admin, string label)
     {
         var suffix = Guid.NewGuid().ToString("N");
@@ -620,6 +767,10 @@ public sealed class UtilityMeteringTests : IClassFixture<PrimeTectApiFactory>
     private sealed record MeterSetupResponse(Guid PropertyId, List<UtilityAccountResponse> Accounts, List<UtilityMainMeterResponse> MainMeters, List<MeterInstallationResponse> Installations, List<MeterInstallationAuditResponse> Audit);
 
     private sealed record MeterReplacementResponse(Guid PreviousInstallationId, MeterInstallationResponse NewInstallation, DateTimeOffset ReplacementOccurredAtUtc, string PropertyLocalDate, bool AffectedDraftRecalculated, string? BlockingMessage);
+
+    private sealed record MeterPhotoRecord(Guid Id, Guid PropertyId, Guid UnitId, Guid BillingCycleId, Guid BillingUnitBillId, MeterPhotoStatus Status, bool IsAttached, Guid? MeterInstallationId);
+
+    private sealed record CsrfResponse(string Token);
 
     private sealed record BillingMeterSegmentResponse(Guid? MeterInstallationId, int SortOrder, decimal? PreviousReading, MeterReadingSource PreviousReadingSource, decimal? CurrentReading, decimal? ConsumptionUnits, bool FinalReadingUnavailable);
 
