@@ -37,7 +37,7 @@ public static class InfrastructureServiceCollectionExtensions
         }
 
         services.AddSingleton<IMeterPhotoStorage, LocalMeterPhotoStorage>();
-        services.AddSingleton<IMeterOcrProvider, UnavailableMeterOcrProvider>();
+        services.AddSingleton<IMeterOcrProvider, LocalTesseractMeterOcrProvider>();
         services.AddHostedService<MeterPhotoCleanupService>();
 
         return services;

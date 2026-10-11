@@ -59,3 +59,11 @@ export function collectionBillDisplay(billedAmount: number | null) {
 export function preserveWorkflowContext<T extends { propertyId: string; billingMonth: string; unitId?: string; language: "en" | "bn" }, L extends "en" | "bn">(context: T, language: L): Omit<T, "language"> & { language: L } {
   return { ...context, language } as Omit<T, "language"> & { language: L };
 }
+
+export function adoptMeterOcrSuggestion(suggestion: number) {
+  return String(suggestion);
+}
+
+export function isCurrentMeterPhotoResult(requestId: number, currentRequestId: number, returnedCycleId: string, expectedCycleId: string, returnedBillId: string, expectedBillId: string) {
+  return requestId === currentRequestId && returnedCycleId === expectedCycleId && returnedBillId === expectedBillId;
+}

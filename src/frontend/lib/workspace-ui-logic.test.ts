@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectionBillDisplay, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
+import { adoptMeterOcrSuggestion, collectionBillDisplay, isCurrentMeterPhotoResult, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
 
 test("room entry advances only after a successful save and stops at the last room", () => {
   assert.equal(nextMeterRoomIndex(0, 3, false), 1);
@@ -52,4 +52,11 @@ test("language changes preserve property, month, and room context", () => {
 test("missing approved bills remain distinct from zero-valued bills", () => {
   assert.equal(collectionBillDisplay(null), "No approved bill");
   assert.equal(collectionBillDisplay(0), "Tk 0.00 billed");
+});
+
+test("OCR suggestion adoption is explicit and stale photo responses are rejected", () => {
+  assert.equal(adoptMeterOcrSuggestion(1234.5), "1234.5");
+  assert.equal(isCurrentMeterPhotoResult(3, 3, "cycle-a", "cycle-a", "bill-a", "bill-a"), true);
+  assert.equal(isCurrentMeterPhotoResult(2, 3, "cycle-a", "cycle-a", "bill-a", "bill-a"), false);
+  assert.equal(isCurrentMeterPhotoResult(3, 3, "cycle-b", "cycle-a", "bill-a", "bill-a"), false);
 });

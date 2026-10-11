@@ -17,7 +17,18 @@
     <PackageReference Include="SkiaSharp" Version="4.151.2" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.151.2" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.151.2" />
+    <PackageReference Include="TesseractOCR" Version="5.5.2" />
     <ProjectReference Include="..\PrimeTect.Application\PrimeTect.Application.csproj" />
     <ProjectReference Include="..\PrimeTect.Domain\PrimeTect.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Ocr\tessdata\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <None Include="$(NuGetPackageRoot)tesseractocr\5.5.2\x64\tesseract.exe" Link="x64\tesseract.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
 </Project>

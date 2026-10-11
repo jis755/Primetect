@@ -607,6 +607,46 @@ Development and tests use private local storage under `App_Data/meter-photos` or
 
 The current provider is `unavailable-local-provider`: no OCR engine is configured, no image is sent to a paid or external service, and no confidence score is manufactured. Manual entry remains fully usable. Deterministic fixtures cover the provider boundary and normalization behavior only; they do not establish real-meter OCR accuracy. Any future OCR derivative must remain separate from the normalized source photo. Exact observation time is not stored; the existing observation date and server save/audit timestamps remain separate, and legacy missing dates are not invented.
 
+### Local OCR suggestions
+
+Meter-photo OCR uses the local Windows x64 `TesseractOCR` 5.5.2 package
+(Tesseract 5.5.0) and the included official `tessdata_fast` English
+`eng.traineddata` model. Both are Apache-2.0; the model license is included at
+`src/backend/PrimeTect.Infrastructure/Ocr/tessdata/LICENSE.txt`. Tesseract's
+small `tsv` configuration is included from the official Tesseract repository.
+The package's native engine requires the Microsoft Visual C++ 2022 x64 runtime.
+
+This checkout verified inference only on **Windows x64**. The packaged binary
+is intentionally not a claim of Linux, macOS, container, or mobile deployment
+support. On another platform, or when the executable/model is absent, OCR
+returns unavailable and manual entry remains available. `MeterOcr:ExecutablePath`,
+`MeterOcr:TessdataPath`, and `MeterOcr:TemporaryPath` can override local paths
+for a supported deployment; they must remain private local paths.
+
+The server makes a temporary PNG crop of the normalized evidence's bounded
+central display region, runs at most two local Tesseract processes at once, and
+kills a process on cancellation or after eight seconds. Temporary derivatives
+are deleted; the normalized stored photo is never replaced or transmitted.
+Only one numeric candidate from that display region is offered. Multiple
+separated candidate groups, multiple OCR words, unreadable images, missing
+components, or errors yield no suggestion. The provider does not use prior
+readings, guess decimal positions/red wheels, or claim Bengali image OCR.
+Bangla digits are normalized only if text reaches parsing.
+
+An OCR suggestion is never saved, submitted, approved, or billed automatically.
+Staff must explicitly choose **Use suggestion**, may edit it, and must re-check
+the photo confirmation before Save & Next. Editing the numeric value, changing
+or removing the photo, or changing room/month clears that confirmation. A late
+upload response for a replaced room/photo is ignored. Tesseract's returned word
+confidence is shown only as engine output, not as a probability or accuracy
+guarantee.
+
+Real-meter checklist: take a straight, well-lit photo with the reading in the
+central display; verify that labels/serials are outside it; treat rolling or
+red-wheel digits as manual entry; retake when the result is absent/ambiguous;
+then correct and explicitly confirm the final number. Never use synthetic test
+accuracy as a real-meter accuracy claim.
+
 ### Optional property locations
 
 Users with property-management permission can enter latitude and longitude together when creating or editing a property. Coordinates are range-validated, remain nullable for existing properties, and appear read-only with an **Open in Maps** action when present. The link uses Google's official directions URL format and does not add a Maps SDK, API key, GPS tracking, proximity enforcement, or embedded map.
