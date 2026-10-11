@@ -3,6 +3,7 @@ using System.Data.Common;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Http.Features;
@@ -29,6 +30,11 @@ public static class PrimeTectEndpointMapping
 
         var secure = api.MapGroup(string.Empty).RequireAuthorization();
         secure.MapGet("/auth/me", (Delegate)GetCurrentUserAsync);
+        secure.MapGet("/auth/csrf", (HttpContext httpContext, IAntiforgery antiforgery) =>
+        {
+            var tokens = antiforgery.GetAndStoreTokens(httpContext);
+            return Results.Ok(new { token = tokens.RequestToken });
+        });
         secure.MapPost("/auth/logout", (Delegate)LogoutAsync);
         secure.MapGet("/properties", (Delegate)GetPropertiesAsync);
         secure.MapGet("/properties/{propertyId:guid}", (Delegate)GetPropertyAsync);
@@ -936,6 +942,10 @@ public static class PrimeTectEndpointMapping
         catch (InvalidDataException exception)
         {
             return BadRequest(exception.Message);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return BadRequest("The meter photo took too long to process. Use a smaller JPEG, PNG, or WebP image.");
         }
 
         MeterOcrSuggestion suggestion;

@@ -49,6 +49,7 @@ Thumbs.db
 
 # Logs and local database files
 *.log
+src/backend/PrimeTect.Api/App_Data/
 *.db
 *.sqlite
 *.sqlite3

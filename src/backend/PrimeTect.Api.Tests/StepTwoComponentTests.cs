@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using PrimeTect.Domain.Entities;
 using PrimeTect.Domain.Enums;
 using PrimeTect.Infrastructure.Storage;
+using SkiaSharp;
 using Xunit;
 
 namespace PrimeTect.Api.Tests;
@@ -94,21 +95,14 @@ public sealed class StepTwoComponentTests
 
     private static byte[] MinimalPng(int width, int height)
     {
-        var bytes = new byte[32];
-        bytes[0] = 0x89;
-        bytes[1] = 0x50;
-        bytes[2] = 0x4E;
-        bytes[3] = 0x47;
-        bytes[4] = 0x0D;
-        bytes[5] = 0x0A;
-        bytes[6] = 0x1A;
-        bytes[7] = 0x0A;
-        bytes[12] = (byte)'I';
-        bytes[13] = (byte)'H';
-        bytes[14] = (byte)'D';
-        bytes[15] = (byte)'R';
-        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(16, 4), (uint)width);
-        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(20, 4), (uint)height);
-        return bytes;
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(SKColors.White);
+        }
+
+        using var image = SKImage.FromBitmap(bitmap);
+        using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+        return encoded.ToArray();
     }
 }

@@ -12,6 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 builder.Services.AddIdentityCore<AppUser>(options =>
     {
         options.User.RequireUniqueEmail = true;
@@ -71,6 +72,7 @@ var app = builder.Build();
 app.UseCors("Frontend");
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseAntiforgery();
 app.MapHealthChecks("/health");
 app.MapGet("/api/health", () => Results.Ok(new HealthResponse("PrimeTect API", "ok", DateTimeOffset.UtcNow)))
     .WithName("ApiHealth");

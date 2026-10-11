@@ -603,9 +603,9 @@ QR labels use the existing one-electricity-meter-per-unit model. Multiple physic
 
 The guided room-entry screen has **Take meter photo** with camera capture where the browser provides it and ordinary file upload as the fallback. JPEG, PNG, and the verified WebP header variant are accepted up to 10 MB with safe generated storage keys and dimension limits. HEIC is rejected. A preview can be removed or retaken. The staff member must confirm the numeric reading separately; an OCR suggestion, when a provider exists, never writes a reading automatically. Saving still uses the existing meter-reading endpoint, concurrency version, negative-consumption checks, opening-reading rules, and draft/return/approval lifecycle.
 
-Development and tests use private local storage under `App_Data/meter-photos` or the configured `MeterPhotos:RootPath`; the directory is not served as static content. Staged uploads that are not attached are cleaned up after 24 hours by the hosted cleanup service. Database and file writes are not one transaction: a failed database save deletes the staged file and returns an unsaved error. Production needs a durable private storage implementation, backup/retention policy, and deployment-specific cleanup monitoring before this is suitable for durable operations.
+Development and tests use private local storage under `App_Data/meter-photos` or the configured `MeterPhotos:RootPath`; the directory is not served as static content. New JPEG, PNG, and WebP uploads are decoded with SkiaSharp 4.151.2, limited to 10 MB, 8,000 pixels per side, 25 million decoded pixels, and one frame, then re-encoded without EXIF, GPS, ICC, IPTC, XMP, or other embedded metadata. All eight EXIF orientations, including mirrored variants, are applied before encoding. The stored result is therefore normalized and is not byte-for-byte identical to the source. The accepted formats and dimensions are covered by synthetic tests; HEIC is explicitly rejected. Staged uploads that are not attached are cleaned up after 24 hours by the hosted cleanup service. Database and file writes are not one transaction: a failed database save deletes the staged file and returns an unsaved error. Production needs a durable private storage implementation, backup/retention policy, and deployment-specific cleanup monitoring before this is suitable for durable operations.
 
-The current provider is `unavailable-local-provider`: no OCR engine is configured, no image is sent to a paid or external service, and no confidence score is manufactured. Manual entry remains fully usable. Deterministic OCR fixtures cover the provider boundary only; they do not establish real-meter accuracy. The current local validator preserves the accepted source bytes and validates their declared image header/dimensions; EXIF GPS removal and full camera-orientation normalization remain a follow-up limitation, so photos should be captured through a browser that has already normalized orientation and must not be treated as physical-presence evidence. Exact observation time is not stored; the existing observation date and server save/audit timestamps remain separate, and legacy missing dates are not invented.
+The current provider is `unavailable-local-provider`: no OCR engine is configured, no image is sent to a paid or external service, and no confidence score is manufactured. Manual entry remains fully usable. Deterministic fixtures cover the provider boundary and normalization behavior only; they do not establish real-meter OCR accuracy. Any future OCR derivative must remain separate from the normalized source photo. Exact observation time is not stored; the existing observation date and server save/audit timestamps remain separate, and legacy missing dates are not invented.
 
 ### Optional property locations
 
@@ -618,3 +618,65 @@ Users with property-management permission can enter latitude and longitude toget
 3. As assigned staff, open the room, capture a supported image or upload one, verify the preview and manual-confirmation checkbox, and confirm a failed upload/save keeps the input without showing **Saved**.
 4. Confirm the attached photo is visible only to authorized reading viewers, approved readings remain immutable, and no OCR suggestion is saved without staff confirmation. Treat OCR accuracy and real-phone camera/QR behavior as pending until manually inspected on a reachable device.
 5. Add coordinates as an authorized administrator and verify the read-only map action. Leave both fields blank for a property without a known location.
+
+## Fresh QR/photo demo verification (2026-10-11)
+
+The fresh synthetic verification database is `primetect_demo_qr_photo_20261011_af21907c`.
+All 11 migrations currently in `src/backend/PrimeTect.Infrastructure/Migrations` were applied to that database only, including `20261010220000_QrMeterPhotosAndLocations`. The existing `primetect` database and earlier demos were not migrated or modified; their applied migration status remains **unknown**.
+
+The ignored local configuration is:
+
+- `src/backend/PrimeTect.Api/appsettings.QrPhotoDemo.Local.json`
+- `src/backend/PrimeTect.Api/qr-photo-demo-credentials.secret.json`
+
+The second file contains the synthetic Admin, Manager, Staff, and Finance account credentials. Do not print, commit, or copy its passwords into documentation. The private synthetic photo directory is `src/backend/PrimeTect.Api/App_Data/qr-photo-demo-af21907c`, which is ignored and is not served as static content.
+
+The verified local pair is:
+
+- Frontend: `http://127.0.0.1:3014`
+- API: `http://127.0.0.1:5014`
+
+The frontend was started from current source with `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:5014`; the API was started from the verified build with the local demo database connection and private photo-root configuration. Health was not used as the database proof: account, property, billing, QR, photo, and migration behavior were checked against the new database.
+
+### Restart the same local demo pair
+
+Do not start an older demo against this schema. From the repository root, derive the connection from the ignored GuidedDemo configuration in memory, replace only its database name with the generated demo name, and assert the target before starting the API:
+
+```powershell
+$demo = Get-Content src/backend/PrimeTect.Api/appsettings.QrPhotoDemo.Local.json | ConvertFrom-Json
+$sourcePath = Join-Path src/backend/PrimeTect.Api $demo.ConnectionSource
+$source = Get-Content $sourcePath | ConvertFrom-Json
+$conn = [string]$source.ConnectionStrings.PrimeTectDatabase
+$conn = $conn -replace '(?i)(^|;)Database=[^;]*', ('$1Database=' + $demo.ConnectionDatabase)
+if ($conn -notmatch ('(?i)(^|;)Database=' + [regex]::Escape($demo.ConnectionDatabase) + '(;|$)')) { throw 'Refusing to start: unexpected database target.' }
+$env:ConnectionStrings__PrimeTectDatabase = $conn
+$env:MeterPhotos__RootPath = $demo.MeterPhotos.RootPath
+dotnet run --project src/backend/PrimeTect.Api --no-build --urls http://127.0.0.1:5014
+```
+
+In a second terminal, start the current frontend without changing its tracked `.env.local`:
+
+```powershell
+Push-Location src/frontend
+$env:NEXT_PUBLIC_API_BASE_URL = 'http://127.0.0.1:5014'
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3014
+Pop-Location
+```
+
+To stop only this pair, inspect the listeners first with `Get-NetTCPConnection -LocalPort 5014,3014` and stop the confirmed PrimeTect owner processes. Do not stop unrelated listeners. The currently running API and frontend launch PIDs are recorded in `%TEMP%\primetect_qr_photo_demo_api_pid.txt` and `%TEMP%\primetect_qr_photo_demo_frontend_pid.txt`.
+
+### Verified synthetic coverage
+
+The new demo includes two properties with separate assignments, unequal floors, units `2A` and `6B`, metered and fixed-charge-only units, a named tenant assigned to both `2A` and `6B`, an occupancy without name or phone, explicit opening readings, draft/returned/submitted/approved examples, optional coordinates, and synthetic private photo evidence. API smoke verification confirmed QR resolution with an explicit month, rotation/revocation, assignment isolation, manual photo save/retrieval, normalized JPEG bytes without EXIF, unavailable OCR, wrong-cycle photo rejection, approved-reading immutability, optional coordinates, and tenant current-assignment preservation.
+
+Supported upload formats are JPEG, PNG, and WebP. HEIC is intentionally unsupported. The normalized source is not byte-for-byte original; its orientation is applied and identifying metadata is removed. OCR remains unavailable and no suggestion is fabricated. Real camera capture, QR scanning on another device, and visual responsive verification remain pending because no browser runtime was available in this environment.
+
+### Short bilingual manual checklist
+
+1. **English / বাংলা:** sign in from the ignored credential file, select the property and an explicit billing month, then open a QR-linked room. Confirm the unit label before entering a reading / লগইন করে সম্পত্তি ও মাস বেছে রুমটি খুলুন।
+2. Generate/download a Room door or Electricity meter QR label as Admin, rotate it, and confirm the old reference is rejected / Admin হিসেবে QR তৈরি ও ঘুরিয়ে পুরনো লিংক বাতিল দেখুন।
+3. Capture or upload a JPEG/PNG/WebP, inspect the preview, retake/remove it, manually confirm the reading, and verify save-before-advance / ছবি দেখে রিডিং নিশ্চিত করে সংরক্ষণ করুন।
+4. Retrieve the attached photo as authorized staff, then verify an unassigned user is denied. Confirm the normalized result has no EXIF and OCR says unavailable / অনুমোদিত ব্যবহারকারীই ছবি দেখতে পারে।
+5. Add optional coordinates for one property and open the directions link; leave an unknown property's coordinates empty / অবস্থান ঐচ্ছিক।
+
+For phone testing, `127.0.0.1` works only on the PC. A separate phone requires a private LAN hostname/IP in `PublicAppBaseUrl`, matching `AllowedOrigins`, and `NEXT_PUBLIC_API_BASE_URL`, with the API/frontend bound for that LAN. Do not open a public tunnel or change the firewall. Camera capture may require a secure browser context; LAN camera behavior and HEIC rejection still need real-device verification.

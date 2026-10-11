@@ -1715,7 +1715,8 @@ function RoomMeterEntry({ property, month: initialMonth, role, permissions, onEr
     const form = new FormData();
     form.append("file", file);
     try {
-      const uploaded = await apiFetch<MeterPhoto>(`/api/properties/${property.id}/billing-cycles/${cycle.id}/meter-photos/${currentBill.id}`, { method: "POST", body: form });
+      const csrf = await apiFetch<{ token: string }>("/api/auth/csrf");
+      const uploaded = await apiFetch<MeterPhoto>(`/api/properties/${property.id}/billing-cycles/${cycle.id}/meter-photos/${currentBill.id}`, { method: "POST", headers: { "X-CSRF-TOKEN": csrf.token }, body: form });
       setMeterPhoto(uploaded);
       onMessage(text("Photo uploaded. Confirm the reading before saving.", "ছবি আপলোড হয়েছে। সেভ করার আগে রিডিং নিশ্চিত করুন।"));
     } catch (caught) {
