@@ -868,6 +868,149 @@ Screenshots are under `%TEMP%\pt-verify\metering-shots` (workstation-local).
 Desktop browser automation does not verify a real-phone camera, external QR
 scanning, or real-meter OCR accuracy; those still require a real device and meter.
 
+## Field-testing milestone: staff readings, QR, photos, collections, feedback (2026-10-13)
+
+A fresh isolated field-test database was created:
+`primetect_fieldtest_20261012_b09e075b` (not `primetect` or an earlier demo; all
+twelve migrations verified applied, 0 pending). Ignored local files:
+
+- `src/backend/PrimeTect.Api/appsettings.FieldTest.Local.json`
+- `src/backend/PrimeTect.Api/metering-fieldtest.credentials.secret.json`
+- `src/backend/PrimeTect.Api/App_Data/field-test-b09e075b` (private photo storage)
+
+Verified running pair: frontend `http://127.0.0.1:3031`, API
+`http://127.0.0.1:5031` (`/api/health`). The API runs the current Release build
+with `ASPNETCORE_ENVIRONMENT=Demo`; the frontend runs the current source from an
+isolated copy (`%TEMP%\primetect-fe-3031`) so no shared Next.js cache is
+disturbed. Seed content: `Field Test Tower` (6 units including a fixed-only unit,
+ordinary and replaced submeters, approved January, incomplete/blocked February),
+`Field Test Review` (clean submit/return/correct/approve month),
+`Field Test Annex` (unassigned) and `Field Test Offsite` (legacy unit, missing
+period); separate Admin, Building Staff, and Finance accounts; active, revoked,
+and unassigned-property QR links.
+
+### Real persisted browser workflows (20 checks, one worker)
+
+All checks ran against the live 3031/5031 pair with **no mocked successful
+mutation responses**; every mutation was confirmed through an API/database-backed
+reload. Passed: explicit property/month selection; QR resolution while signed in
+and after logging in from the link; safe local return navigation that keeps the
+destination and clears the `meterLink` query; revoked QR and unassigned-property
+access denied (404/403); decimal and Bangla-digit entry (`3020.5`, `৩০২০.৫`);
+replacement openings/segments (U-02 20 + 15 = 35; U-01 opening 7 blocked); real
+synthetic photo upload -> preview -> OCR outcome -> manual correction ->
+confirmation reset -> save -> authorized retrieval (Staff/Admin 200, Finance 403,
+cross-org 404); a saved photo cannot be reused for another room (400); a failed
+request preserves the input and does not advance; successful Save & Next persists
+and advances once; refresh shows the value and progress; missing readings, missing
+final readings, and missing periods remain review-blocked; submit -> return ->
+correct -> resubmit -> approve with separate users (staff self-approval 403);
+approved readings immutable (409); a partial collection report pends, Finance
+approval updates confirmed/outstanding totals, and self-approval is rejected;
+room-context feedback reaches the reviewer bell; unauthorized accounts cannot
+reach photos/admin/other-property data; Bangla, 390px mobile, keyboard focus,
+touch targets, and bottom-navigation overlap.
+
+**Real versus synthetic in this run:** the photo is a synthetic canvas PNG
+normalized by the real private-storage pipeline; the local OCR returned *no
+suggestion* for that synthetic image, so **explicit adoption via "Use
+suggestion" was not exercised by real OCR in this run**. Manual entry,
+correction, confirmation reset, save, and authorized/denied retrieval were all
+exercised for real. The failed-request check is a network interruption, **not**
+offline support. Exact observation time is still not stored.
+
+### Fixes in this milestone
+
+- A room QR link had no way back: a dismissible banner now shows the destination
+  and provides **Back to My Work**, which clears the `meterLink` query locally
+  (no external redirect) while preserving the selected property/month.
+- The staff home shell did not display global errors, so a revoked or
+  unauthorized QR link failed silently; the shell now shows the success/error
+  notice.
+
+### Real-phone testing preparation (not performed here)
+
+This checkout binds to loopback only. `127.0.0.1` on a phone means the phone
+itself. To test on a phone on the same trusted Wi-Fi, an operator must do the
+following (these are **not** done and require explicit authorization):
+
+1. Find the workstation LAN IPv4 (`ipconfig`).
+2. Bind the API and frontend to the LAN interface with matching origins:
+   - API: `--urls http://0.0.0.0:5031` (or `http://<LAN-IP>:5031`) and
+     `AllowedOrigins__0=http://<LAN-IP>:3031`.
+   - Frontend: `npm.cmd run dev -- --hostname 0.0.0.0 --port 3031` with
+     `NEXT_PUBLIC_API_BASE_URL=http://<LAN-IP>:5031`.
+   - Set `PublicAppBaseUrl=http://<LAN-IP>:3031` before generating QR labels so
+     the label URL is phone-reachable.
+3. Allow inbound TCP 3031/5031 in the Windows firewall (not changed here).
+4. Open `http://<LAN-IP>:3031` in the phone browser and sign in. Cookies are
+   HttpOnly with `SameSite=Lax`; unsafe requests need the CSRF token from
+   `/api/auth/csrf` sent as `X-CSRF-TOKEN`, which the app handles automatically.
+5. **In-browser camera access requires a secure context.** `https://<LAN-IP>`
+   needs a trusted certificate installed on the phone (not done here); plain
+   `http://<LAN-IP>` does not grant `getUserMedia`. Do not open a public tunnel
+   or install a wildcard/self-signed certificate on devices without authorization.
+
+A **printable/downloadable test QR is available only for synthetic test data**:
+as Admin open a unit card -> **Meter QR label**, choose placement, generate, then
+**Download SVG** / **Print label**. The QR is public *identification* only;
+resolving it still requires sign-in, property assignment, reading permission, and
+an explicit billing month.
+
+### Real-meter acceptance checklist (bilingual) — PENDING real device
+
+No real phone camera, external QR scan, or real meter was available in this
+environment, so every row below is **pending**. Treat the synthetic OCR run as
+storage/plumbing evidence only, never as real-meter accuracy, and never auto-save
+OCR output.
+
+| # | Meter / condition | Human-confirmed ground truth | OCR suggestion | Result | Capture & save | Phone/browser | Status |
+|---|---|---|---|---|---|---|---|
+| 1 | Digital meter, clear display / ডিজিটাল মিটার, পরিষ্কার ডিসপ্লে | | | | | | Pending |
+| 2 | Mechanical meter with decimal/red wheel / দশমিক বা লাল চাকাসহ | | | | | | Pending |
+| 3 | Off-centre display / ডিসপ্লে কেন্দ্রে নয় | | | | | | Pending |
+| 4 | Glare / আলোর প্রতিফলন | | | | | | Pending |
+| 5 | Darkness / অন্ধকার | | | | | | Pending |
+| 6 | Blur / ঝাপসা | | | | | | Pending |
+| 7 | Partially obscured digits / আংশিক ঢাকা অঙ্ক | | | | | | Pending |
+| 8 | Manual correction when OCR fails or is wrong / OCR ব্যর্থ বা ভুল হলে হাতে সংশোধন | | | | | | Pending |
+
+Record per row: the human-confirmed reading; the OCR suggestion or "no
+suggestion"; exact match / wrong suggestion / no result; the capture and save
+outcome; and the phone/browser tested. A no-result outcome with usable manual
+entry is acceptable. Do not infer decimal placement or invent ground truth. Do
+not send photos to external OCR services or commit personal photos.
+
+### Field-test startup / shutdown
+
+Restart the API (derive the connection in memory; never print the password):
+
+```powershell
+$local = Get-Content src/backend/PrimeTect.Api/appsettings.FieldTest.Local.json | ConvertFrom-Json
+$source = [string](Get-Content (Join-Path src/backend/PrimeTect.Api $local.ConnectionSource) | ConvertFrom-Json).ConnectionStrings.PrimeTectDatabase
+$env:ASPNETCORE_ENVIRONMENT = 'Demo'
+$env:Database__Provider = 'PostgreSQL'
+$env:ConnectionStrings__PrimeTectDatabase = ($source -replace '(?i)(Database|Initial Catalog)=[^;]+', "Database=$($local.ConnectionDatabase)")
+$env:AllowedOrigins__0 = [string]$local.AllowedOrigins[0]
+$env:AllowedOrigins__1 = [string]$local.AllowedOrigins[1]
+$env:PublicAppBaseUrl = [string]$local.PublicAppBaseUrl
+$env:MeterPhotos__RootPath = Join-Path (Resolve-Path src/backend/PrimeTect.Api).Path ([string]$local.MeterPhotos.RootPath)
+dotnet run --no-build -c Release --no-launch-profile --project src/backend/PrimeTect.Api --urls http://127.0.0.1:5031
+```
+
+Restart the frontend from the isolated copy:
+
+```powershell
+$copy = Join-Path $env:TEMP 'primetect-fe-3031'
+$env:NEXT_PUBLIC_API_BASE_URL = 'http://127.0.0.1:5031'
+Set-Location $copy
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3031
+```
+
+Stop only the confirmed `5031`/`3031` listeners
+(`Get-NetTCPConnection -LocalPort 5031,3031 -State Listen`); do not stop the
+pre-existing demos or the unrelated port-3000 app. The database is disposable.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:
