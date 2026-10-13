@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adoptMeterOcrSuggestion, collectionBillDisplay, hasReplacementGuardTranslation, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, meterSegmentLabel, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, replacementGuardMessage, replacementOpeningReadingValid, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
+import { adoptMeterOcrSuggestion, authPanelTitle, collectionBillDisplay, hasReplacementGuardTranslation, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, meterSegmentLabel, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, registrationReady, registrationStepOneValid, replacementGuardMessage, replacementOpeningReadingValid, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
 
 test("room entry advances only after a successful save and stops at the last room", () => {
   assert.equal(nextMeterRoomIndex(0, 3, false), 1);
@@ -116,4 +116,22 @@ test("submitted-month replacement rejection is bilingual", () => {
   assert.equal(replacementGuardMessage(message, "bn"), "মিটার প্রতিস্থাপনের আগে পাঠানো বিলের মাস সংশোধনের জন্য ফেরত দিন।");
   assert.equal(hasReplacementGuardTranslation(message), true);
   assert.equal(replacementGuardMessage("Some other message", "bn"), "Some other message");
+});
+
+test("auth panel navigation labels are bilingual", () => {
+  assert.equal(authPanelTitle("login", "en"), "Log in");
+  assert.equal(authPanelTitle("register", "bn"), "অ্যাকাউন্ট তৈরি করুন");
+  assert.equal(authPanelTitle("accept", "en"), "Accept staff invitation");
+  assert.equal(authPanelTitle("accept", "bn"), "স্টাফ আমন্ত্রণ গ্রহণ করুন");
+});
+
+test("two-step registration validates account details then requires an organization name", () => {
+  const partial = { fullName: "Amina", email: "amina@example.test", password: "StrongPass!1", confirmPassword: "StrongPass!1", organizationName: "" };
+  assert.equal(registrationStepOneValid(partial), true);
+  assert.equal(registrationReady(partial), false); // step 2 still needs the organization name
+  assert.equal(registrationReady({ ...partial, organizationName: "Northstar" }), true);
+  assert.equal(registrationStepOneValid({ ...partial, confirmPassword: "different" }), false);
+  assert.equal(registrationStepOneValid({ ...partial, password: "", confirmPassword: "" }), false);
+  assert.equal(registrationStepOneValid({ ...partial, fullName: "   " }), false);
+  assert.equal(registrationStepOneValid({ ...partial, email: "  " }), false);
 });

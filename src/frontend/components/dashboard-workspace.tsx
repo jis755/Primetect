@@ -3,9 +3,9 @@
 import { ApiHealth } from "@/components/api-health";
 import { LanguageProvider, useLanguage } from "@/components/language";
 import { API_BASE_URL, ApiError, apiFetch } from "@/lib/api";
-import { adoptMeterOcrSuggestion, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, replacementOpeningReadingValid, summarizeMeterProgress, visibleStaffTasks } from "@/lib/workspace-ui-logic";
+import { adoptMeterOcrSuggestion, authPanelTitle, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, registrationReady, registrationStepOneValid, replacementOpeningReadingValid, summarizeMeterProgress, visibleStaffTasks } from "@/lib/workspace-ui-logic";
 import type { FormEvent, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 type UserRole = "Admin" | "Manager" | "BuildingStaff" | "FinanceManager";
 type PropertyType = "ApartmentBuilding" | "IndividualRoomBuilding" | "Shop";
@@ -148,7 +148,7 @@ function DashboardWorkspaceContent() {
   useEffect(() => { apiFetch<Session>("/api/auth/me").then(setSession).catch(() => setSession(null)).finally(() => setLoading(false)); }, []);
   const { text } = useLanguage();
   if (loading) return <CenteredState label={text("Loading your PrimeTect workspace…", "আপনার PrimeTect ওয়ার্কস্পেস লোড হচ্ছে…")} />;
-  if (!session) return <AuthScreen mode={mode} error={error} onModeChange={setMode} onAuthenticated={(next) => { setError(""); setMessage(""); setSession(next); }} onError={setError} />;
+  if (!session) return <SimpleAuthScreen error={error} onAuthenticated={(next) => { setError(""); setMessage(""); setSession(next); }} onError={setError} />;
   if (session.recoveryOnly) return <RecoveryScreen onDone={() => { setSession(null); setMode("login"); }} />;
   return <Workspace session={session} message={message} error={error} onMessage={setMessage} onError={setError} onLogout={async () => { await apiFetch<void>("/api/auth/logout", { method: "POST" }); setSession(null); setMode("login"); }} />;
 }
@@ -184,7 +184,126 @@ function RecoveryScreen({ onDone }: { onDone: () => void }) {
   return <main data-recovery-screen="true" className="min-h-screen bg-sand px-6 py-8 sm:px-10 lg:px-14"><div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-lg flex-col justify-center"><div className="flex items-center justify-between gap-4"><BrandMark /><ApiHealth /></div><form onSubmit={submit} className="mt-8 rounded-[2rem] border border-ink/10 bg-white/85 p-6 shadow-soft sm:p-8"><h1 className="text-2xl font-black tracking-[-0.05em] text-ink">{text("Change your temporary password", "আপনার সাময়িক পাসওয়ার্ড পরিবর্তন করুন")}</h1><p className="mt-2 text-sm leading-6 text-ink/55">{text("Your organization Admin issued a temporary password. Set a new password to continue. No SMS or email is sent, and the temporary password is shown only once.", "আপনার সংস্থার অ্যাডমিন একটি সাময়িক পাসওয়ার্ড দিয়েছেন। চালিয়ে যেতে নতুন পাসওয়ার্ড দিন। কোনো এসএমএস বা ইমেইল পাঠানো হয় না এবং সাময়িক পাসওয়ার্ড কেবল একবার দেখানো হয়।")}</p>{error && <p role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm font-semibold text-rose-800">{error}</p>}<div className="mt-5 space-y-3"><Field label={text("Temporary password", "সাময়িক পাসওয়ার্ড")} type={inputType} value={current} onChange={setCurrent} required /><Field label={text("New password", "নতুন পাসওয়ার্ড")} type={inputType} value={next} onChange={setNext} required /><Field label={text("Confirm new password", "নতুন পাসওয়ার্ড নিশ্চিত করুন")} type={inputType} value={confirm} onChange={setConfirm} required /></div><label className="mt-3 flex min-h-11 items-center gap-2 text-sm font-bold text-ink"><input type="checkbox" checked={show} onChange={(event) => setShow(event.target.checked)} className="h-5 w-5 accent-pine" />{text("Show passwords", "পাসওয়ার্ড দেখান")}</label><p className="mt-3 text-xs leading-5 text-ink/55">{text("At least 10 characters with an uppercase letter, a lowercase letter, a digit, and a symbol. The new password cannot be the temporary one.", "অন্তত ১০ অক্ষর, একটি বড় হাতের, একটি ছোট হাতের, একটি সংখ্যা ও একটি চিহ্ন। নতুন পাসওয়ার্ড সাময়িক পাসওয়ার্ড হতে পারবে না।")}</p><button type="submit" disabled={busy} className="mt-5 min-h-12 w-full rounded-2xl bg-pine px-5 py-3.5 text-base font-bold text-white transition hover:bg-ink disabled:cursor-wait disabled:opacity-60">{busy ? text("Saving…", "সংরক্ষণ হচ্ছে…") : text("Save password", "পাসওয়ার্ড সংরক্ষণ করুন")}</button></form></div></main>;
 }
 
-function AuthScreen({ mode, error, onModeChange, onAuthenticated, onError }: { mode: "login" | "register" | "accept"; error: string; onModeChange: (mode: "login" | "register" | "accept") => void; onAuthenticated: (session: Session) => void; onError: (message: string) => void }) {
+function PasswordField({ label, value, onChange, placeholder, autoComplete = "new-password", show, onToggle }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; autoComplete?: string; show: boolean; onToggle: () => void }) {
+  const { text } = useLanguage();
+  const id = useId();
+  return <div className="block text-sm font-bold text-ink">
+    <label htmlFor={id} className="block">{label}</label>
+    <span className="relative mt-2 block">
+      <input id={id} type={show ? "text" : "password"} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoComplete={autoComplete} className="block min-h-12 w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 pr-20 font-normal outline-none transition focus:border-pine focus:ring-2 focus:ring-pine/10" />
+      <button type="button" onClick={onToggle} aria-label={show ? text("Hide password", "পাসওয়ার্ড লুকান") : text("Show password", "পাসওয়ার্ড দেখান")} aria-pressed={show} className="absolute right-1.5 top-1/2 min-h-10 -translate-y-1/2 rounded-xl px-3 text-xs font-bold text-pine">{show ? text("Hide", "লুকান") : text("Show", "দেখান")}</button>
+    </span>
+  </div>;
+}
+
+function SimpleAuthScreen({ error, onAuthenticated, onError }: { error: string; onAuthenticated: (session: Session) => void; onError: (message: string) => void }) {
+  const { language, text, error: localizedError } = useLanguage();
+  const [mode, setMode] = useState<"login" | "register" | "accept">("login");
+  const [step, setStep] = useState<1 | 2>(1);
+  const [form, setForm] = useState({ fullName: "", email: "", password: "", confirmPassword: "", organizationName: "", token: "", countryCode: "BD" });
+  const [showPassword, setShowPassword] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
+
+  function switchMode(next: "login" | "register" | "accept") { setMode(next); setStep(1); setLocalError(""); setForgotOpen(false); }
+  async function finish() { onAuthenticated(await apiFetch<Session>("/api/auth/me")); }
+
+  async function submitLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    onError(""); setLocalError("");
+    if (!form.email.trim() || !form.password) { setLocalError(text("Enter your email or mobile number and password.", "আপনার ইমেইল বা মোবাইল নম্বর ও পাসওয়ার্ড দিন।")); return; }
+    setBusy(true);
+    try {
+      await apiFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ email: form.email, password: form.password, countryCode: form.countryCode }) });
+      await finish();
+    } catch (caught) { onError(localizedError(caught, text("We could not sign you in. Check your details and try again.", "সাইন ইন করা যায়নি। তথ্য দেখে আবার চেষ্টা করুন।"))); }
+    finally { setBusy(false); }
+  }
+
+  async function submitRegister(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    onError(""); setLocalError("");
+    if (step === 1) {
+      if (!registrationStepOneValid(form)) { setLocalError(form.password !== form.confirmPassword ? text("The passwords do not match.", "পাসওয়ার্ড দুটি মিলছে না।") : text("Fill in your name, email, and password.", "আপনার নাম, ইমেইল ও পাসওয়ার্ড দিন।")); return; }
+      setStep(2);
+      return;
+    }
+    if (!registrationReady(form)) { setLocalError(text("Enter your organization name.", "আপনার সংস্থার নাম দিন।")); return; }
+    setBusy(true);
+    try {
+      await apiFetch("/api/auth/register-owner", { method: "POST", body: JSON.stringify({ organizationName: form.organizationName, fullName: form.fullName, email: form.email, password: form.password }) });
+      await finish();
+    } catch (caught) { onError(localizedError(caught, text("We could not create your account. Check the details and try again.", "অ্যাকাউন্ট তৈরি করা যায়নি। তথ্য দেখে আবার চেষ্টা করুন।"))); }
+    finally { setBusy(false); }
+  }
+
+  async function submitAccept(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    onError(""); setLocalError("");
+    if (!form.token.trim() || !form.fullName.trim() || !form.password) { setLocalError(text("Enter the invitation token, your name, and a password.", "আমন্ত্রণ টোকেন, আপনার নাম ও পাসওয়ার্ড দিন।")); return; }
+    if (form.password !== form.confirmPassword) { setLocalError(text("The passwords do not match.", "পাসওয়ার্ড দুটি মিলছে না।")); return; }
+    setBusy(true);
+    try {
+      await apiFetch("/api/auth/accept-invitation", { method: "POST", body: JSON.stringify({ token: form.token, fullName: form.fullName, password: form.password }) });
+      await finish();
+    } catch (caught) { onError(localizedError(caught, text("We could not accept this invitation.", "এই আমন্ত্রণ গ্রহণ করা যায়নি।"))); }
+    finally { setBusy(false); }
+  }
+
+  const title = authPanelTitle(mode, language);
+  return <main data-auth-screen="true" className="min-h-screen bg-white px-5 py-8 sm:px-8">
+    <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md flex-col justify-center">
+      <div className="flex items-center justify-between gap-4"><BrandMark /><LanguageToggle /></div>
+      <div className="mt-8">
+        <h1 className="text-3xl font-black tracking-[-0.05em] text-ink">{title}</h1>
+        <p className="mt-2 text-sm leading-6 text-ink/55">{mode === "login" ? text("Sign in with your email address or an Admin-assigned mobile number.", "আপনার ইমেইল ঠিকানা বা অ্যাডমিন-নির্ধারিত মোবাইল নম্বর দিয়ে সাইন ইন করুন।") : mode === "register" ? text("Create a new organization and become its first Admin. This does not join an existing landlord's organization.", "নতুন সংস্থা তৈরি করে প্রথম অ্যাডমিন হন। এটি কোনো বিদ্যমান মালিকের সংস্থায় যোগ করে না।") : text("Join the organization named in your secure one-time staff invitation.", "নিরাপদ একবারের স্টাফ আমন্ত্রণে থাকা সংস্থায় যোগ দিন।")}</p>
+      </div>
+      {(error || localError) && <p role="alert" className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">{localError || error}</p>}
+      {mode === "login" && <form onSubmit={submitLogin} className="mt-6 space-y-4">
+        <Field label={text("Email address or mobile number", "ইমেইল ঠিকানা বা মোবাইল নম্বর")} value={form.email} onChange={(value) => setForm({ ...form, email: value })} placeholder="you@example.com" type="text" required />
+        <label className="block text-sm font-bold text-ink">{text("Country code", "দেশের কোড")}<select value={form.countryCode} onChange={(event) => setForm({ ...form, countryCode: event.target.value })} className="mt-2 block min-h-12 w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 font-normal outline-none focus:border-pine focus:ring-2 focus:ring-pine/10"><option value="BD">Bangladesh (+880)</option><option value="">International (+ country code)</option></select><span className="mt-1 block text-xs font-normal text-ink/50">{text("Choose Bangladesh for a local 01… number, or International and start with + and the country code.", "স্থানীয় 01… নম্বরের জন্য বাংলাদেশ বেছে নিন, অথবা আন্তর্জাতিক বেছে নিয়ে + ও দেশের কোড দিয়ে শুরু করুন।")}</span></label>
+        <PasswordField label={text("Password", "পাসওয়ার্ড")} value={form.password} onChange={(value) => setForm({ ...form, password: value })} autoComplete="current-password" show={showPassword} onToggle={() => setShowPassword((value) => !value)} />
+        <button type="submit" disabled={busy} className="min-h-12 w-full rounded-2xl bg-pine px-5 py-3.5 text-base font-bold text-white transition hover:bg-ink disabled:cursor-wait disabled:opacity-60">{busy ? text("Signing in…", "সাইন ইন হচ্ছে…") : text("Log in", "সাইন ইন")}</button>
+        <div className="text-center"><button type="button" onClick={() => setForgotOpen((value) => !value)} className="min-h-11 rounded-xl px-3 text-sm font-bold text-pine underline">{text("Forgot password?", "পাসওয়ার্ড ভুলে গেছেন?")}</button></div>
+        {forgotOpen && <p className="rounded-2xl border border-pine/20 bg-mint/40 px-4 py-3 text-sm leading-6 text-ink/75">{text("Password recovery is handled by your organization Admin. Ask your Admin to reset your staff password; no SMS or email is sent.", "পাসওয়ার্ড পুনরুদ্ধার আপনার সংস্থার অ্যাডমিন করেন। আপনার স্টাফ পাসওয়ার্ড রিসেট করতে অ্যাডমিনকে বলুন; কোনো এসএমএস বা ইমেইল পাঠানো হয় না।")}</p>}
+        <button type="button" onClick={() => switchMode("register")} className="min-h-12 w-full rounded-2xl border-2 border-pine bg-white px-5 py-3 text-base font-bold text-pine transition hover:bg-mint/40">{text("Create new account", "নতুন অ্যাকাউন্ট তৈরি করুন")}</button>
+        <div className="text-center"><button type="button" onClick={() => switchMode("accept")} className="min-h-11 rounded-xl px-3 text-sm font-bold text-ink/70 underline">{text("Accept staff invitation", "স্টাফ আমন্ত্রণ গ্রহণ করুন")}</button></div>
+      </form>}
+      {mode === "register" && <form onSubmit={submitRegister} className="mt-6 space-y-4">
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-pine">{step === 1 ? text("Step 1 of 2 · Your account", "ধাপ ১ / ২ · আপনার অ্যাকাউন্ট") : text("Step 2 of 2 · Your organization", "ধাপ ২ / ২ · আপনার সংস্থা")}</p>
+        {step === 1 ? <>
+          <Field label={text("Your name", "আপনার নাম")} value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} placeholder={text("Amina Rahman", "আমিনা রহমান")} autoComplete="name" required />
+          <Field label={text("Email address", "ইমেইল ঠিকানা")} value={form.email} onChange={(value) => setForm({ ...form, email: value })} type="email" placeholder="you@example.com" autoComplete="email" required />
+          <PasswordField label={text("Password", "পাসওয়ার্ড")} value={form.password} onChange={(value) => setForm({ ...form, password: value })} autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((value) => !value)} />
+          <PasswordField label={text("Confirm password", "পাসওয়ার্ড নিশ্চিত করুন")} value={form.confirmPassword} onChange={(value) => setForm({ ...form, confirmPassword: value })} autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((value) => !value)} />
+          <p className="text-xs leading-5 text-ink/50">{text("At least 10 characters with uppercase, lowercase, a digit, and a symbol.", "অন্তত ১০ অক্ষর, একটি বড় হাতের, একটি ছোট হাতের, একটি সংখ্যা ও একটি চিহ্ন।")}</p>
+          <button type="submit" disabled={busy} className="min-h-12 w-full rounded-2xl bg-pine px-5 py-3.5 text-base font-bold text-white transition hover:bg-ink disabled:opacity-60">{text("Continue", "পরবর্তী")}</button>
+        </> : <>
+          <p className="rounded-2xl border border-pine/20 bg-mint/40 px-4 py-3 text-sm text-ink/75">{text("Account", "অ্যাকাউন্ট")}: <span className="font-bold">{form.fullName.trim() || text("Unnamed", "নামহীন")}</span> · {form.email.trim()}</p>
+          <Field label={text("Organization name", "সংস্থার নাম")} value={form.organizationName} onChange={(value) => setForm({ ...form, organizationName: value })} placeholder={text("Northstar Property Group", "নর্থস্টার প্রপার্টি গ্রুপ")} autoComplete="organization" required />
+          <p className="text-xs leading-5 text-ink/50">{text("You become this organization's first Admin. Add your first property after registration.", "আপনি এই সংস্থার প্রথম অ্যাডমিন হবেন। নিবন্ধনের পর প্রথম সম্পত্তি যোগ করুন।")}</p>
+          <div className="flex flex-wrap gap-3"><button type="button" onClick={() => setStep(1)} className="min-h-12 flex-1 rounded-2xl border border-ink/15 bg-white px-5 py-3 text-base font-bold text-ink">{text("Back", "ফিরুন")}</button><button type="submit" disabled={busy} className="min-h-12 flex-1 rounded-2xl bg-pine px-5 py-3.5 text-base font-bold text-white transition hover:bg-ink disabled:opacity-60">{busy ? text("Creating…", "তৈরি হচ্ছে…") : text("Create account", "অ্যাকাউন্ট তৈরি করুন")}</button></div>
+        </>}
+        <div className="text-center"><button type="button" onClick={() => switchMode("login")} className="min-h-11 rounded-xl px-3 text-sm font-bold text-ink/70 underline">{text("Back to log in", "সাইন ইনে ফিরুন")}</button></div>
+      </form>}
+      {mode === "accept" && <form onSubmit={submitAccept} className="mt-6 space-y-4">
+        <Field label={text("Invitation token", "আমন্ত্রণ টোকেন")} value={form.token} onChange={(value) => setForm({ ...form, token: value })} placeholder={text("Paste the one-time token", "একবারের টোকেন পেস্ট করুন")} required />
+        <Field label={text("Your name", "আপনার নাম")} value={form.fullName} onChange={(value) => setForm({ ...form, fullName: value })} placeholder={text("Amina Rahman", "আমিনা রহমান")} autoComplete="name" required />
+        <PasswordField label={text("Password", "পাসওয়ার্ড")} value={form.password} onChange={(value) => setForm({ ...form, password: value })} autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((value) => !value)} />
+        <PasswordField label={text("Confirm password", "পাসওয়ার্ড নিশ্চিত করুন")} value={form.confirmPassword} onChange={(value) => setForm({ ...form, confirmPassword: value })} autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((value) => !value)} />
+        <button type="submit" disabled={busy} className="min-h-12 w-full rounded-2xl bg-pine px-5 py-3.5 text-base font-bold text-white transition hover:bg-ink disabled:opacity-60">{busy ? text("Joining…", "যোগ দেওয়া হচ্ছে…") : text("Accept invitation", "আমন্ত্রণ গ্রহণ করুন")}</button>
+        <p className="text-xs leading-5 text-ink/50">{text("The invitation is single-use and expires. Your Admin shares the token manually; no invitation email is sent.", "আমন্ত্রণ একবারই ব্যবহারযোগ্য এবং সময়সীমা আছে। আপনার অ্যাডমিন টোকেনটি হাতে শেয়ার করেন; কোনো আমন্ত্রণ ইমেইল পাঠানো হয় না।")}</p>
+        <div className="text-center"><button type="button" onClick={() => switchMode("login")} className="min-h-11 rounded-xl px-3 text-sm font-bold text-ink/70 underline">{text("Back to log in", "সাইন ইনে ফিরুন")}</button></div>
+      </form>}
+    </div>
+  </main>;
+}
+
+function LegacyAuthScreenCurrent({ mode, error, onModeChange, onAuthenticated, onError }: { mode: "login" | "register" | "accept"; error: string; onModeChange: (mode: "login" | "register" | "accept") => void; onAuthenticated: (session: Session) => void; onError: (message: string) => void }) {
   const [form, setForm] = useState({ organizationName: "", fullName: "", email: "", password: "", token: "", countryCode: "BD" });
   const [busy, setBusy] = useState(false);
   const { text, error: localizedError } = useLanguage();
@@ -2345,7 +2464,7 @@ function StaffPanel({ staff, properties, onSaved, onError, onMessage }: { staff:
   return <InfoCard title="Staff access"><form onSubmit={invite} className="space-y-3"><p className="text-xs leading-5 text-ink/50">Only Admins can invite assigned Building Managers, Building Staff, and Finance Managers. Share the one-time token manually and securely.</p><Field label="Invite email" type="email" value={email} onChange={setEmail} placeholder="staff@example.com" required /><label className="block text-sm font-bold text-ink">Role<select value={role} onChange={(event) => setRole(event.target.value as "Manager" | "BuildingStaff" | "FinanceManager")} className="mt-2 w-full rounded-xl border border-ink/10 bg-white px-3 py-3 font-normal outline-none focus:border-pine"><option value="BuildingStaff">Building staff</option><option value="Manager">Building manager</option><option value="FinanceManager">Finance manager</option></select></label><button disabled={busy} className="w-full rounded-xl bg-pine px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{busy ? "Working…" : "Create invitation"}</button></form>{inviteToken && <div className="mt-4 rounded-xl border border-sun/50 bg-sun/15 p-3"><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-ink/55">Manual invitation token</p><code className="mt-2 block break-all text-xs text-ink">{inviteToken}</code><p className="mt-2 text-[11px] leading-4 text-ink/55">The recipient should choose “Accept invitation” and paste this one-time token. No email was sent.</p></div>}<div className="mt-6 space-y-4">{staff.length === 0 ? <p className="text-sm text-ink/45">No invited accounts yet.</p> : staff.map((member) => <div key={member.user.id} className="rounded-xl border border-ink/10 p-3"><div><p className="text-sm font-bold text-ink">{member.user.fullName}</p><p className="text-xs text-ink/45">{member.user.email} · {roleLabels[member.user.role]}</p></div>{member.user.role !== "Admin" && <div className="mt-3 grid gap-2">{properties.filter((property) => !property.isArchived).map((property) => <label key={property.id} className="flex items-center gap-2 text-xs text-ink/65"><input type="checkbox" checked={member.propertyIds.includes(property.id)} onChange={() => void toggleAssignment(member, property.id)} />{property.name}</label>)}</div>}</div>)}</div></InfoCard>;
 }
 
-function Field({ label, value, onChange, placeholder, type = "text", required = false, min }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; required?: boolean; min?: string }) { return <label className="block min-w-0 text-sm font-bold text-ink">{label}<input required={required} min={min} step={type === "number" ? "0.01" : undefined} inputMode={type === "number" ? "decimal" : undefined} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-2 w-full min-w-0 rounded-xl border border-ink/10 bg-white px-3 py-3 font-normal outline-none transition placeholder:text-ink/30 focus:border-pine focus:ring-2 focus:ring-pine/10" /></label>; }
+function Field({ label, value, onChange, placeholder, type = "text", required = false, min, autoComplete }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; type?: string; required?: boolean; min?: string; autoComplete?: string }) { return <label className="block min-w-0 text-sm font-bold text-ink">{label}<input required={required} min={min} autoComplete={autoComplete} step={type === "number" ? "0.01" : undefined} inputMode={type === "number" ? "decimal" : undefined} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-2 w-full min-w-0 rounded-2xl border border-ink/10 bg-white px-4 py-3 font-normal outline-none transition placeholder:text-ink/30 focus:border-pine focus:ring-2 focus:ring-pine/10" /></label>; }
 function AuthTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) { return <button type="button" className={`pb-4 ${active ? "border-b-2 border-pine text-pine" : "text-ink/40"}`} onClick={onClick}>{children}</button>; }
 function BrandMark() { return <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-pine text-lg font-black text-white shadow-soft">P</div><span className="text-lg font-black tracking-[-0.04em] text-ink">PrimeTect</span></div>; }
 function InfoCard({ title, children }: { title: string; children: ReactNode }) { return <section className="rounded-[2rem] border border-ink/10 bg-white/75 p-6 shadow-soft"><h2 className="text-lg font-black tracking-[-0.04em] text-ink">{title}</h2><div className="mt-4 text-sm leading-6 text-ink/60">{children}</div></section>; }

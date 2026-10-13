@@ -1102,6 +1102,55 @@ immediately / পুরোনো সেশন সাথে সাথে শে�
 Physical phone camera, external QR scanning, and real-meter OCR testing remain
 **pending** and are not part of this milestone.
 
+## Simplified login, create-account, and invitation screens (2026-10-14)
+
+The unauthenticated screens were rebuilt into three simple, bilingual panels on a
+clean white background with restrained PrimeTect branding, reusing the existing
+authentication APIs (no second credential store, no backend contract changes).
+**The attached reference image was not present in the repository**, so the layout
+follows the written requirements; visual verification is limited to the automated
+desktop/mobile checks below.
+
+- **Log in:** one large labeled **Email address or mobile number** field, a country
+  selector (Bangladesh default) that preserves the existing normalization
+  (`01…` → `+880…`, international `+` code; invalid numbers rejected), a password
+  field with an accessible **Show / Hide** control (`aria-pressed`), a large primary
+  **Log in** button, a **Forgot password?** link that explains the current
+  Admin-assisted staff recovery and does **not** claim any message was sent, an
+  outlined **Create new account** button, a secondary **Accept staff invitation**
+  link, and a persistent বাংলা / English toggle. Buttons and fields are at least
+  48px; labels and inputs keep `autocomplete` hints for password managers.
+- **Create account (two-step):** step 1 collects your name, email, password, and
+  confirm password locally; step 2 collects the required organization name and
+  submits **once** through the existing `/api/auth/register-owner`. Back and
+  language switching preserve the entered data, no incomplete account or invented
+  organization name is created, and successful registration lands on the existing
+  owner first-property setup. Public signup does not join an existing
+  organization and adds no public mobile-number signup.
+- **Accept staff invitation:** a separate panel reusing the existing single-use,
+  expiring token workflow with role/organization assignment and safe errors; it
+  states that the token is shared manually and no invitation email is sent.
+
+Safeguards preserved: generic login failures and lockout, cookie/CSRF protection,
+immediate session revocation, the restricted temporary-password session and
+mandatory password-change screen, organization isolation and Admin protections,
+and QR destination preservation after login. Passwords and temporary credentials
+stay in component memory only (never browser storage), duplicate submissions are
+blocked by a busy guard, and the staff recovery controls are never shown publicly.
+
+Verification: `npm run test:ui` (17 passed, including auth-navigation,
+registration-step, and helper tests), `npm run typecheck`, and `npm run build`.
+Backend code did not change. Real persisted browser acceptance (10 passed, one
+worker, no mocked successful mutations) against the auth demo DB: labeled login
+controls with ≥48px targets; password show/hide; honest forgot-password text;
+login/create/accept navigation preserving step-1 input across language switching;
+email login; duplicate-email failure preserving fields without a fake success;
+multi-step registration creating a persisted owner organization; UI acceptance of
+a persisted staff invitation; Admin reset opening the restricted recovery screen
+with `/api/properties` returning 403; and 390px mobile English/Bangla with no
+horizontal overflow. The running demo (`http://127.0.0.1:3041` / API
+`http://127.0.0.1:5041`) serves this UI.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:

@@ -81,6 +81,28 @@ export function meterRoomAdvanceAfterSave(saved: boolean, currentIndex: number, 
   return saved ? nextMeterRoomIndex(currentIndex, roomCount, unfinishedOnly) : nextMeterRoomIndex(currentIndex, roomCount, true);
 }
 
+export type RegistrationFields = { fullName: string; email: string; password: string; confirmPassword: string; organizationName: string };
+
+export function registrationStepOneValid(fields: Pick<RegistrationFields, "fullName" | "email" | "password" | "confirmPassword">) {
+  return fields.fullName.trim().length > 0
+    && fields.email.trim().length > 0
+    && fields.password.length > 0
+    && fields.password === fields.confirmPassword;
+}
+
+export function registrationReady(fields: RegistrationFields) {
+  return registrationStepOneValid(fields) && fields.organizationName.trim().length > 0;
+}
+
+export function authPanelTitle(mode: "login" | "register" | "accept", language: "en" | "bn") {
+  const titles = {
+    login: { en: "Log in", bn: "সাইন ইন" },
+    register: { en: "Create account", bn: "অ্যাকাউন্ট তৈরি করুন" },
+    accept: { en: "Accept staff invitation", bn: "স্টাফ আমন্ত্রণ গ্রহণ করুন" },
+  } as const;
+  return titles[mode][language];
+}
+
 export type MeterSegmentLike = { sortOrder: number; previousReading: number | null; currentReading: number | null; consumptionUnits: number | null; finalReadingUnavailable: boolean };
 
 export function meterSegmentLabel(segment: MeterSegmentLike) {
