@@ -1011,6 +1011,97 @@ Stop only the confirmed `5031`/`3031` listeners
 (`Get-NetTCPConnection -LocalPort 5031,3031 -State Listen`); do not stop the
 pre-existing demos or the unrelated port-3000 app. The database is disposable.
 
+## Mobile-number login and Admin-assisted password recovery (2026-10-14)
+
+Existing users can sign in with their email **or** an Admin-assigned mobile
+number. The login field is bilingual (**Email or mobile number / ইমেইল বা মোবাইল
+নম্বর**); local Bangladesh `01…` numbers are normalized to `+880…` when
+Bangladesh is selected (the default), international numbers use an explicit `+`
+country code, and Bangla digits are normalized to ASCII. Numbers are stored
+canonically as text and are **globally unique** at the PostgreSQL boundary
+(filtered unique index `IX_users_PhoneNumber`), because a user belongs to exactly
+one organization and login has no organization selector. There is no
+cross-organization membership or shared credential, so one organization's Admin
+cannot affect another organization's accounts. Invalid or unassigned numbers
+return a generic failure; the server never guesses a country.
+
+**Admin staff sign-in & recovery** (Admin-only, own organization, non-Admin
+targets only): the Admin can assign/change a login mobile number and issue a
+one-time temporary password. Both actions require the acting Admin's **current
+password**, an **exact account-name confirmation**, and are **audited** in
+`staff_credential_audit_entries` (actor, target, action, reason, time,
+submission key) without any password or token. The number is labelled
+**Admin-assigned**, not SMS-verified.
+
+Password reset generates a cryptographically random temporary password (meets
+the existing Identity policy), default expiry **24 hours** (configurable via
+`Authentication:TemporaryPasswordExpiryHours`), returned **once** with
+`Cache-Control: no-store`. It is never stored, logged, placed in a URL, or put in
+browser storage; if the response is lost, a new reset must be issued. A repeated
+submission key is rejected without another reset, and a later reset invalidates
+the earlier temporary password.
+
+Temporary-password login opens only a **restricted recovery session**
+(`primetect:recovery` claim). Server-side middleware restricts it to session
+status, the required password change, logout, and CSRF bootstrap; all property,
+photo, reading, collection, report, and administration endpoints return 403 until
+the password is changed. The bilingual change screen provides new/confirm
+passwords, show/hide, requirements, and save; the new password cannot reuse the
+temporary one. On success the recovery state clears and the user must log in
+normally with the new password.
+
+**Session invalidation:** the authentication cookie carries the Identity security
+stamp, and every authenticated request re-checks it against the database. A phone
+change or password reset updates the target's stamp, so the target's existing
+cookies are rejected on the **next** request rather than after an extended
+interval. Identity password hashing, lockout (the acting Admin's password check
+uses lockout-on-failure), and concurrency stamps are reused.
+
+Not implemented: SMS/email/OTP delivery, 2FA, tenant authentication, Admin
+self-recovery, and automatic account linking. “Forgot password?” directs staff to
+their organization Admin; no message is sent. Existing email login is unchanged
+and does not depend on email delivery.
+
+### Migration and demo
+
+The migration is `20261013174707_StaffPhoneLoginAndPasswordRecovery` (adds
+`MustChangePassword`, `TemporaryPasswordExpiresAtUtc`, `AdminAssignedPhoneNumber`
+to `users`, the filtered unique login-phone index, and the audit table). Apply it
+only to a fresh disposable database; do not apply it to `primetect` or an
+existing demo.
+
+Fresh synthetic auth demo: database `primetect_authdemo_20261014_ce242862` (all
+**thirteen** migrations verified applied), API `http://127.0.0.1:5041`, frontend
+`http://127.0.0.1:3041`. Ignored local files:
+`src/backend/PrimeTect.Api/appsettings.AuthDemo.Local.json`,
+`src/backend/PrimeTect.Api/metering-authdemo.credentials.secret.json`, and
+`src/backend/PrimeTect.Api/App_Data/auth-demo-*`. Do not print the passwords.
+
+### Verification
+
+- Frontend UI tests (15 passed), typecheck, production build.
+- Backend build; `dotnet test` (48 passed, 12 skipped).
+- Guarded PostgreSQL suite (12 passed) against generated disposable databases;
+  the new schema test verifies the unique login-phone index and audit table.
+- Real persisted browser acceptance (8 passed, one worker, no mocked successful
+  mutations): Admin email login; Admin assigns a login phone through the panel;
+  Staff phone login; Admin issues a one-time temporary password; the old
+  password/session is rejected; the temporary password opens the restricted
+  recovery screen with `/api/properties` returning 403; the Staff changes the
+  password (show/hide, requirements); normal login with the new password; and
+  the temporary password is rejected afterwards. Screenshots never include
+  passwords.
+
+Manual checklist (bilingual): sign in with email, then with an assigned number /
+ইমেইল দিয়ে সাইন ইন করুন, তারপর নির্ধারিত নম্বর দিয়ে; as Admin assign a number and
+reset a password / অ্যাডমিন হিসেবে নম্বর দিন ও পাসওয়ার্ড রিসেট করুন; confirm the
+temporary password screen forces a change and blocks all other screens / সাময়িক
+পাসওয়ার্ড বদলাতে বাধ্য করে ও অন্য স্ক্রিন বন্ধ রাখে; confirm the old session ends
+immediately / পুরোনো সেশন সাথে সাথে শেষ হয়।
+
+Physical phone camera, external QR scanning, and real-meter OCR testing remain
+**pending** and are not part of this milestone.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:

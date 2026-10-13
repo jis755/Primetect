@@ -4,7 +4,7 @@ namespace PrimeTect.Api.Contracts;
 
 public sealed record OwnerRegistrationRequest(string OrganizationName, string FullName, string Email, string Password);
 
-public sealed record LoginRequest(string Email, string Password, bool RememberMe = false);
+public sealed record LoginRequest(string Email, string Password, bool RememberMe = false, string? CountryCode = null);
 
 public sealed record InvitationRequest(string Email, UserRole Role);
 
@@ -281,7 +281,17 @@ public sealed record MeterOverviewResponse(
     string? BillingCycleStatus,
     IReadOnlyList<MeterRoomOverviewResponse> Units);
 
-public sealed record ApiUserResponse(Guid Id, string Email, string FullName, UserRole Role, Guid OrganizationId);
+public sealed record ApiUserResponse(Guid Id, string Email, string FullName, UserRole Role, Guid OrganizationId, string? PhoneNumber = null, bool PhoneNumberConfirmed = false, bool AdminAssignedPhoneNumber = false);
+
+public sealed record AdminStaffPhoneRequest(string ActingPassword, string PhoneNumber, string? CountryCode, string ConfirmFullName, string? Reason);
+
+public sealed record StaffPhoneResponse(Guid UserId, string FullName, UserRole Role, string PhoneNumber, bool PhoneNumberConfirmed, bool AdminAssigned, DateTimeOffset AdministeredAtUtc);
+
+public sealed record AdminStaffPasswordResetRequest(string ActingPassword, string ConfirmFullName, string Reason, Guid SubmissionKey);
+
+public sealed record StaffPasswordResetResponse(Guid UserId, string FullName, UserRole Role, string TemporaryPassword, DateTimeOffset ExpiresAtUtc, string ManualSharing, bool AdminAssigned);
+
+public sealed record ChangeTemporaryPasswordRequest(string CurrentPassword, string NewPassword);
 
 public sealed record UnitResponse(Guid Id, string Name, bool IsEnabled, bool IsArchived, OccupancyStatus OccupancyStatus);
 

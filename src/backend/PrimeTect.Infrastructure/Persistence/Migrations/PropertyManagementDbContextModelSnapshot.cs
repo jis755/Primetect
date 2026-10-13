@@ -1365,6 +1365,55 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.ToTable("room_meter_issue_audit_entries", (string)null);
                 });
 
+            modelBuilder.Entity("PrimeTect.Domain.Entities.StaffCredentialAuditEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AfterJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BeforeJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("SubmissionKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TargetUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("TemporaryPasswordExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "SubmissionKey")
+                        .IsUnique();
+
+                    b.HasIndex("OrganizationId", "TargetUserId", "OccurredAtUtc");
+
+                    b.ToTable("staff_credential_audit_entries", (string)null);
+                });
+
             modelBuilder.Entity("PrimeTect.Domain.Entities.StaffPropertyAssignment", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -1643,6 +1692,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<int>("AccessFailedCount")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("AdminAssignedPhoneNumber")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("ConcurrencyStamp")
                         .IsConcurrencyToken()
                         .HasColumnType("text");
@@ -1667,6 +1719,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("LockoutEnd")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("NormalizedEmail")
                         .HasMaxLength(256)
@@ -1696,6 +1751,9 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.Property<string>("SecurityStamp")
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset?>("TemporaryPasswordExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<bool>("TwoFactorEnabled")
                         .HasColumnType("boolean");
 
@@ -1711,6 +1769,10 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasIndex("NormalizedUserName")
                         .IsUnique()
                         .HasDatabaseName("UserNameIndex");
+
+                    b.HasIndex("PhoneNumber")
+                        .IsUnique()
+                        .HasFilter("\"PhoneNumber\" IS NOT NULL AND \"PhoneNumber\" <> ''");
 
                     b.HasIndex("OrganizationId", "Email");
 
@@ -2027,6 +2089,15 @@ namespace PrimeTect.Infrastructure.Persistence.Migrations
                     b.HasOne("PrimeTect.Domain.Entities.RoomMeterIssue", null)
                         .WithMany()
                         .HasForeignKey("RoomMeterIssueId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PrimeTect.Domain.Entities.StaffCredentialAuditEntry", b =>
+                {
+                    b.HasOne("PrimeTect.Domain.Entities.Organization", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

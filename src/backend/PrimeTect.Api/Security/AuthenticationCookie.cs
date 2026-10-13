@@ -7,16 +7,22 @@ namespace PrimeTect.Api.Security;
 
 public static class AuthenticationCookie
 {
-    public static async Task SignInAsync(HttpContext httpContext, AppUser user, bool isPersistent = false)
+    public static async Task SignInAsync(HttpContext httpContext, AppUser user, bool isPersistent = false, bool recoverySession = false)
     {
-        var claims = new[]
+        var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new Claim(ClaimTypes.Name, user.FullName),
-            new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
-            new Claim("organization_id", user.OrganizationId.ToString()),
-            new Claim(ClaimTypes.Role, user.Role.ToString()),
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Name, user.FullName),
+            new(ClaimTypes.Email, user.Email ?? string.Empty),
+            new("organization_id", user.OrganizationId.ToString()),
+            new(ClaimTypes.Role, user.Role.ToString()),
+            new(SecurityClaims.SecurityStamp, user.SecurityStamp ?? string.Empty),
         };
+        if (recoverySession)
+        {
+            claims.Add(new Claim(SecurityClaims.RecoverySession, "1"));
+        }
+
         var identity = new ClaimsIdentity(claims, IdentityConstants.ApplicationScheme);
         var principal = new ClaimsPrincipal(identity);
         var properties = new AuthenticationProperties { IsPersistent = isPersistent, AllowRefresh = true };

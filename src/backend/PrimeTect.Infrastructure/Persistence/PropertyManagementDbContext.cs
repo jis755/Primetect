@@ -59,6 +59,8 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<MeterInstallationAuditEntry> MeterInstallationAuditEntries => Set<MeterInstallationAuditEntry>();
 
+    public DbSet<StaffCredentialAuditEntry> StaffCredentialAuditEntries => Set<StaffCredentialAuditEntry>();
+
     public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
 
     public DbSet<OrganizationRolePermission> OrganizationRolePermissions => Set<OrganizationRolePermission>();
@@ -75,6 +77,12 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.Property(user => user.FullName).HasMaxLength(200).IsRequired();
             entity.Property(user => user.Role).HasConversion<string>().HasMaxLength(40).IsRequired();
             entity.HasIndex(user => new { user.OrganizationId, user.Email });
+            // Login-phone uniqueness is a PostgreSQL boundary constraint. It is added only for Npgsql because
+            // the InMemory provider ignores filtered indexes and would reject multiple null phone numbers.
+            if (Database.IsNpgsql())
+            {
+                entity.HasIndex(user => user.PhoneNumber).IsUnique().HasFilter("\"PhoneNumber\" IS NOT NULL AND \"PhoneNumber\" <> ''");
+            }
         });
 
         modelBuilder.Entity<Organization>(entity =>
@@ -459,6 +467,19 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.HasIndex(audit => new { audit.OrganizationId, audit.SubmissionKey }).IsUnique();
             entity.HasOne<Property>().WithMany().HasForeignKey(audit => audit.PropertyId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<Unit>().WithMany().HasForeignKey(audit => audit.UnitId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<StaffCredentialAuditEntry>(entity =>
+        {
+            entity.ToTable("staff_credential_audit_entries");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.Action).HasMaxLength(40).IsRequired();
+            entity.Property(audit => audit.Reason).HasMaxLength(500);
+            entity.Property(audit => audit.BeforeJson).HasColumnType("text");
+            entity.Property(audit => audit.AfterJson).HasColumnType("text");
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.TargetUserId, audit.OccurredAtUtc });
+            entity.HasIndex(audit => new { audit.OrganizationId, audit.SubmissionKey }).IsUnique();
+            entity.HasOne<Organization>().WithMany().HasForeignKey(audit => audit.OrganizationId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

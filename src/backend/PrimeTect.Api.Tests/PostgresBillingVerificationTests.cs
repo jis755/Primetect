@@ -91,9 +91,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 12 || pending.Any())
+            if (applied.Count() != 13 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected twelve applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected thirteen applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)
@@ -298,7 +298,7 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(12L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(13L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));
@@ -327,6 +327,22 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "meter_installations", "OpeningReading"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_meter_segments", "PreviousReading"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_meter_segments", "ConsumptionUnits"));
+    }
+
+    [PostgresFact]
+    public async Task Staff_phone_login_schema_enforces_a_unique_login_phone()
+    {
+        RequirePostgres();
+
+        await using var connection = await database.OpenConnectionAsync();
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'staff_credential_audit_entries'"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'users' AND indexname = 'IX_users_PhoneNumber' AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%PhoneNumber%' AND indexdef LIKE '%IS NOT NULL%'"));
+        Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'staff_credential_audit_entries' AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%SubmissionKey%'"));
+
+        foreach (var column in new[] { "MustChangePassword", "TemporaryPasswordExpiresAtUtc", "AdminAssignedPhoneNumber" })
+        {
+            Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'users' AND column_name = '{column}'"));
+        }
     }
 
     [PostgresFact]

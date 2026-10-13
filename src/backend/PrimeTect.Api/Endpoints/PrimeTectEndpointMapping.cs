@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Data.Common;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
@@ -52,6 +53,9 @@ public static class PrimeTectEndpointMapping
         secure.MapPost("/staff/invitations", (Delegate)CreateInvitationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/properties/{propertyId:guid}/staff/{userId:guid}", (Delegate)AssignStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapDelete("/properties/{propertyId:guid}/staff/{userId:guid}", (Delegate)RemoveStaffAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/staff/{userId:guid}/phone", (Delegate)AssignStaffPhoneAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/staff/{userId:guid}/reset-password", (Delegate)ResetStaffPasswordAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+        secure.MapPost("/auth/change-temporary-password", (Delegate)ChangeTemporaryPasswordAsync);
         secure.MapGet("/tenants", (Delegate)GetTenantsAsync);
         secure.MapPost("/tenants", (Delegate)CreateTenantAsync);
         secure.MapPut("/tenants/{tenantId:guid}", (Delegate)UpdateTenantAsync);
@@ -164,19 +168,41 @@ public static class PrimeTectEndpointMapping
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
         {
-            return BadRequest("Email and password are required.");
+            return Results.Unauthorized();
         }
 
-        var user = await userManager.FindByEmailAsync(request.Email.Trim());
+        var identifier = request.Email.Trim();
+        AppUser? user;
+        if (identifier.Contains('@', StringComparison.Ordinal))
+        {
+            user = await userManager.FindByEmailAsync(identifier);
+        }
+        else
+        {
+            var canonicalPhone = NormalizeLoginPhone(identifier, request.CountryCode);
+            user = canonicalPhone is null ? null : await FindByLoginPhoneAsync(userManager, canonicalPhone);
+        }
+
         if (user is null || !user.IsActive)
         {
             return Results.Unauthorized();
         }
 
-        var result = await signInManager.PasswordSignInAsync(user, request.Password, request.RememberMe, lockoutOnFailure: true);
+        var result = await signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
         if (!result.Succeeded)
         {
             return Results.Unauthorized();
+        }
+
+        if (user.MustChangePassword)
+        {
+            if (user.TemporaryPasswordExpiresAtUtc is null || user.TemporaryPasswordExpiresAtUtc <= DateTimeOffset.UtcNow)
+            {
+                return Results.Json(new { message = "The temporary password has expired. Ask your organization Admin for a new reset." }, statusCode: StatusCodes.Status401Unauthorized);
+            }
+
+            await AuthenticationCookie.SignInAsync(httpContext, user, request.RememberMe, recoverySession: true);
+            return Results.Ok(new { passwordResetRequired = true, recoveryOnly = true });
         }
 
         await AuthenticationCookie.SignInAsync(httpContext, user, request.RememberMe);
@@ -251,15 +277,392 @@ public static class PrimeTectEndpointMapping
 
         var user = await userManager.FindByIdAsync(actor.UserId.ToString());
         var organization = await db.Organizations.AsNoTracking().FirstOrDefaultAsync(item => item.Id == actor.OrganizationId);
-        return user is null || organization is null
-            ? Results.Unauthorized()
-            : Results.Ok(new
+        if (user is null || organization is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (httpContext.User.HasClaim(SecurityClaims.RecoverySession, "1"))
+        {
+            return Results.Ok(new
             {
                 user = ToUserResponse(user),
                 organization = new { organization.Id, organization.Name },
-                permissions = (await OrganizationPermissionAuthorization.GetAsync(db, actor, CancellationToken.None))
-                    .ToDictionary(pair => pair.Key.ToString(), pair => pair.Value),
+                passwordResetRequired = true,
+                recoveryOnly = true,
             });
+        }
+
+        return Results.Ok(new
+        {
+            user = ToUserResponse(user),
+            organization = new { organization.Id, organization.Name },
+            permissions = (await OrganizationPermissionAuthorization.GetAsync(db, actor, CancellationToken.None))
+                .ToDictionary(pair => pair.Key.ToString(), pair => pair.Value),
+        });
+    }
+
+    private static async Task<IResult> AssignStaffPhoneAsync(
+        Guid userId,
+        AdminStaffPhoneRequest request,
+        HttpContext httpContext,
+        UserManager<AppUser> userManager,
+        SignInManager<AppUser> signInManager,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ActingPassword) || string.IsNullOrWhiteSpace(request.PhoneNumber) || string.IsNullOrWhiteSpace(request.ConfirmFullName))
+        {
+            return BadRequest("The Admin password, a mobile number, and a name confirmation are required.");
+        }
+
+        var target = await userManager.FindByIdAsync(userId.ToString());
+        if (target is null || target.OrganizationId != actor.OrganizationId)
+        {
+            return Results.NotFound();
+        }
+
+        if (target.Role == UserRole.Admin || target.Id == actor.UserId)
+        {
+            return Results.Json(new { message = "Admin credentials cannot be changed through staff management." }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        if (!string.Equals(target.FullName, request.ConfirmFullName.Trim(), StringComparison.Ordinal))
+        {
+            return BadRequest("Confirm the exact account name before changing the mobile number.");
+        }
+
+        var acting = await userManager.FindByIdAsync(actor.UserId.ToString());
+        if (acting is null || !(await signInManager.CheckPasswordSignInAsync(acting, request.ActingPassword, lockoutOnFailure: true)).Succeeded)
+        {
+            return Results.Json(new { message = "The current Admin password is incorrect." }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var canonical = NormalizeLoginPhone(request.PhoneNumber, request.CountryCode);
+        if (canonical is null)
+        {
+            return BadRequest("Enter a valid mobile number. Choose a country code for local numbers, or include an explicit country code for international numbers.");
+        }
+
+        var duplicate = await userManager.Users.Where(item => item.PhoneNumber == canonical && item.Id != target.Id).Take(1).ToListAsync(cancellationToken);
+        if (duplicate.Count > 0)
+        {
+            return Results.Conflict(new { message = "This mobile number is already assigned to another account." });
+        }
+
+        var before = JsonSerializer.Serialize(new { target.PhoneNumber, target.PhoneNumberConfirmed, target.AdminAssignedPhoneNumber });
+        target.PhoneNumber = canonical;
+        target.PhoneNumberConfirmed = false;
+        target.AdminAssignedPhoneNumber = true;
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var update = await userManager.UpdateAsync(target);
+            if (!update.Succeeded)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.ValidationProblem(IdentityErrors(update));
+            }
+
+            await userManager.UpdateSecurityStampAsync(target);
+            db.StaffCredentialAuditEntries.Add(new StaffCredentialAuditEntry(actor.OrganizationId, target.Id, actor.UserId, "StaffPhoneAssigned", request.Reason, Guid.NewGuid(), null, before, JsonSerializer.Serialize(new { target.PhoneNumber, target.AdminAssignedPhoneNumber })));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This account changed concurrently. Refresh and try again." });
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This mobile number is already assigned to another account." });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The mobile number could not be saved atomically. No change was recorded.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        return Results.Ok(new StaffPhoneResponse(target.Id, target.FullName, target.Role, canonical, false, true, DateTimeOffset.UtcNow));
+    }
+
+    private static async Task<IResult> ResetStaffPasswordAsync(
+        Guid userId,
+        AdminStaffPasswordResetRequest request,
+        HttpContext httpContext,
+        IConfiguration configuration,
+        UserManager<AppUser> userManager,
+        SignInManager<AppUser> signInManager,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ActingPassword) || string.IsNullOrWhiteSpace(request.ConfirmFullName) || string.IsNullOrWhiteSpace(request.Reason))
+        {
+            return BadRequest("The Admin password, a name confirmation, and a short reason are required.");
+        }
+
+        if (request.SubmissionKey == Guid.Empty)
+        {
+            return BadRequest("A valid submission key is required.");
+        }
+
+        var target = await userManager.FindByIdAsync(userId.ToString());
+        if (target is null || target.OrganizationId != actor.OrganizationId)
+        {
+            return Results.NotFound();
+        }
+
+        if (target.Role == UserRole.Admin || target.Id == actor.UserId)
+        {
+            return Results.Json(new { message = "Admin accounts cannot be reset through staff management." }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        if (!string.Equals(target.FullName, request.ConfirmFullName.Trim(), StringComparison.Ordinal))
+        {
+            return BadRequest("Confirm the exact account name before resetting the password.");
+        }
+
+        var acting = await userManager.FindByIdAsync(actor.UserId.ToString());
+        if (acting is null || !(await signInManager.CheckPasswordSignInAsync(acting, request.ActingPassword, lockoutOnFailure: true)).Succeeded)
+        {
+            return Results.Json(new { message = "The current Admin password is incorrect." }, statusCode: StatusCodes.Status403Forbidden);
+        }
+
+        var duplicate = await db.StaffCredentialAuditEntries.AsNoTracking().FirstOrDefaultAsync(item => item.OrganizationId == actor.OrganizationId && item.SubmissionKey == request.SubmissionKey, cancellationToken);
+        if (duplicate is not null)
+        {
+            return Results.Conflict(new { message = "This reset request was already processed. Issue a new reset if the temporary password was lost." });
+        }
+
+        var expiryHours = 24;
+        if (int.TryParse(configuration["Authentication:TemporaryPasswordExpiryHours"], out var configured) && configured > 0)
+        {
+            expiryHours = configured;
+        }
+
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(expiryHours);
+        var temporaryPassword = GenerateTemporaryPassword();
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var token = await userManager.GeneratePasswordResetTokenAsync(target);
+            var reset = await userManager.ResetPasswordAsync(target, token, temporaryPassword);
+            if (!reset.Succeeded)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.ValidationProblem(IdentityErrors(reset));
+            }
+
+            target.MustChangePassword = true;
+            target.TemporaryPasswordExpiresAtUtc = expiresAt;
+            var update = await userManager.UpdateAsync(target);
+            if (!update.Succeeded)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.ValidationProblem(IdentityErrors(update));
+            }
+
+            await userManager.UpdateSecurityStampAsync(target);
+            db.StaffCredentialAuditEntries.Add(new StaffCredentialAuditEntry(actor.OrganizationId, target.Id, actor.UserId, "StaffPasswordReset", request.Reason, request.SubmissionKey, expiresAt, null, null));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This account changed concurrently. Refresh and try again." });
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This reset request was already processed. Issue a new reset if the temporary password was lost." });
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Problem(detail: "The password reset could not be persisted atomically. No change was recorded.", statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        httpContext.Response.Headers.CacheControl = "no-store";
+        httpContext.Response.Headers.Pragma = "no-cache";
+        return Results.Ok(new StaffPasswordResetResponse(target.Id, target.FullName, target.Role, temporaryPassword, expiresAt, "Share this one-time temporary password manually. No SMS or email is sent and it is shown only once.", true));
+    }
+
+    private static async Task<IResult> ChangeTemporaryPasswordAsync(
+        ChangeTemporaryPasswordRequest request,
+        HttpContext httpContext,
+        UserManager<AppUser> userManager,
+        PropertyManagementDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var actor = httpContext.User.GetRequestUser();
+        if (actor is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!httpContext.User.HasClaim(SecurityClaims.RecoverySession, "1"))
+        {
+            return Results.Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
+        {
+            return BadRequest("Enter your temporary password and a new password.");
+        }
+
+        var user = await userManager.FindByIdAsync(actor.UserId.ToString());
+        if (user is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        if (!user.MustChangePassword)
+        {
+            return BadRequest("No temporary password change is pending.");
+        }
+
+        if (user.TemporaryPasswordExpiresAtUtc is null || user.TemporaryPasswordExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            return Results.Json(new { message = "The temporary password has expired. Ask your organization Admin for a new reset." }, statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        if (string.Equals(request.NewPassword, request.CurrentPassword, StringComparison.Ordinal))
+        {
+            return BadRequest("Choose a new password that is different from the temporary password.");
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var change = await userManager.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
+            if (!change.Succeeded)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.ValidationProblem(IdentityErrors(change));
+            }
+
+            user.MustChangePassword = false;
+            user.TemporaryPasswordExpiresAtUtc = null;
+            var update = await userManager.UpdateAsync(user);
+            if (!update.Succeeded)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Results.ValidationProblem(IdentityErrors(update));
+            }
+
+            await userManager.UpdateSecurityStampAsync(user);
+            db.StaffCredentialAuditEntries.Add(new StaffCredentialAuditEntry(actor.OrganizationId, user.Id, actor.UserId, "StaffTemporaryPasswordChanged", null, Guid.NewGuid(), null, null, null));
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return Results.Conflict(new { message = "This account changed concurrently. Refresh and try again." });
+        }
+
+        await httpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+        httpContext.Response.Headers.CacheControl = "no-store";
+        return Results.Ok(new { changed = true, reLoginRequired = true });
+    }
+
+    private static async Task<AppUser?> FindByLoginPhoneAsync(UserManager<AppUser> userManager, string canonicalPhone)
+    {
+        var matches = await userManager.Users.Where(item => item.PhoneNumber == canonicalPhone).Take(2).ToListAsync();
+        return matches.Count == 1 ? matches[0] : null;
+    }
+
+    private static string? NormalizeLoginPhone(string raw, string? countryCode)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var ascii = new string(raw.Trim().Select(character => character is >= '০' and <= '৯' ? (char)('0' + (character - '০')) : character).ToArray());
+        var hasPlus = ascii.StartsWith('+');
+        var digits = new string(ascii.Where(char.IsDigit).ToArray());
+        if (digits.Length == 0)
+        {
+            return null;
+        }
+
+        if (hasPlus)
+        {
+            var international = "+" + digits;
+            return international.Length is >= 8 and <= 16 ? international : null;
+        }
+
+        var code = (countryCode ?? string.Empty).Trim().ToUpperInvariant();
+        if (code == "BD")
+        {
+            var national = digits;
+            if (national.StartsWith("880", StringComparison.Ordinal))
+            {
+                national = national[3..];
+            }
+
+            if (national.StartsWith('0'))
+            {
+                national = national[1..];
+            }
+
+            return national.Length == 10 ? "+880" + national : null;
+        }
+
+        if (code.Length is >= 1 and <= 3 && code.All(char.IsDigit))
+        {
+            var national = digits.StartsWith('0') ? digits[1..] : digits;
+            var value = "+" + code + national;
+            return value.Length is >= 8 and <= 16 ? value : null;
+        }
+
+        return null;
+    }
+
+    private static string GenerateTemporaryPassword()
+    {
+        const string upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+        const string lower = "abcdefghijkmnopqrstuvwxyz";
+        const string digits = "23456789";
+        const string symbols = "!@#$%*-?";
+        var all = upper + lower + digits + symbols;
+        var password = new char[16];
+        password[0] = Pick(upper);
+        password[1] = Pick(lower);
+        password[2] = Pick(digits);
+        password[3] = Pick(symbols);
+        for (var index = 4; index < password.Length; index++)
+        {
+            password[index] = Pick(all);
+        }
+
+        for (var index = password.Length - 1; index > 0; index--)
+        {
+            var swap = RandomNumberGenerator.GetInt32(index + 1);
+            (password[index], password[swap]) = (password[swap], password[index]);
+        }
+
+        return new string(password);
+
+        static char Pick(string set) => set[RandomNumberGenerator.GetInt32(set.Length)];
     }
 
     private static async Task<IResult> GetRolePermissionsAsync(
@@ -5272,7 +5675,7 @@ public static class PrimeTectEndpointMapping
             new Claim("organization_id", user.OrganizationId.ToString()),
         });
 
-    private static ApiUserResponse ToUserResponse(AppUser user) => new(user.Id, user.Email ?? string.Empty, user.FullName, user.Role, user.OrganizationId);
+    private static ApiUserResponse ToUserResponse(AppUser user) => new(user.Id, user.Email ?? string.Empty, user.FullName, user.Role, user.OrganizationId, user.PhoneNumber, user.PhoneNumberConfirmed, user.AdminAssignedPhoneNumber);
 
     private static ChargeConfigurationResponse ToChargeResponse(ChargeConfiguration configuration) =>
         new(configuration.Id, configuration.UnitId, configuration.ChargeType, configuration.Mode, configuration.BillingMonth, configuration.Amount, configuration.CustomLabel, configuration.WarningMode, configuration.WarningThreshold);
