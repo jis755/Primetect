@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adoptMeterOcrSuggestion, authPanelTitle, collectionBillDisplay, hasReplacementGuardTranslation, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, meterSegmentLabel, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, registrationReady, registrationStepOneValid, replacementGuardMessage, replacementOpeningReadingValid, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks } from "./workspace-ui-logic.ts";
+import { adoptMeterOcrSuggestion, authPanelTitle, collectionBillDisplay, hasReplacementGuardTranslation, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, meterSegmentLabel, monthlySubmissionLocation, nextMeterRoomIndex, preserveRoomDraftAfterFailure, preserveWorkflowContext, registrationReady, registrationStepOneValid, replacementGuardMessage, replacementOpeningReadingValid, reportableCollectionAmount, summarizeMeterProgress, visibleStaffTasks, firstOpeningReadingImportError, openingReadingImportSelectionChanged, summarizeOpeningReadingPreview } from "./workspace-ui-logic.ts";
 
 test("room entry advances only after a successful save and stops at the last room", () => {
   assert.equal(nextMeterRoomIndex(0, 3, false), 1);
@@ -134,4 +134,42 @@ test("two-step registration validates account details then requires an organizat
   assert.equal(registrationStepOneValid({ ...partial, password: "", confirmPassword: "" }), false);
   assert.equal(registrationStepOneValid({ ...partial, fullName: "   " }), false);
   assert.equal(registrationStepOneValid({ ...partial, email: "  " }), false);
+});
+
+test("opening reading preview only allows confirmation when every row is clean", () => {
+  const clean = summarizeOpeningReadingPreview({ canCommit: true, readyCount: 2, skippedCount: 1, conflictCount: 0, errorCount: 0, previewToken: "token", rows: [] });
+  assert.equal(clean.canConfirm, true);
+  assert.equal(clean.ready, 2);
+  assert.equal(clean.skipped, 1);
+  assert.equal(clean.tone, "success");
+
+  const conflicting = summarizeOpeningReadingPreview({ canCommit: false, readyCount: 1, skippedCount: 0, conflictCount: 1, errorCount: 0, previewToken: "", rows: [] });
+  assert.equal(conflicting.canConfirm, false);
+  assert.equal(conflicting.tone, "danger");
+
+  const empty = summarizeOpeningReadingPreview({ canCommit: true, readyCount: 0, skippedCount: 3, conflictCount: 0, errorCount: 0, previewToken: "", rows: [] });
+  assert.equal(empty.canConfirm, false);
+  assert.equal(empty.tone, "muted");
+});
+
+test("opening reading import surfaces the first blocking row error", () => {
+  const preview = {
+    canCommit: false,
+    readyCount: 1,
+    skippedCount: 0,
+    conflictCount: 0,
+    errorCount: 1,
+    previewToken: "",
+    rows: [
+      { rowNumber: 2, unitId: "u1", unitName: "A", status: "Ready", errors: [], notes: [] },
+      { rowNumber: 3, unitId: "u2", unitName: "B", status: "Error", errors: ["opening_reading is invalid"], notes: [] },
+    ],
+  };
+  assert.equal(firstOpeningReadingImportError(preview), "opening_reading is invalid");
+  assert.equal(firstOpeningReadingImportError({ ...preview, rows: [] }), null);
+});
+
+test("choosing a new file resets the previous preview and submission key", () => {
+  assert.deepEqual(openingReadingImportSelectionChanged("rates.csv"), { fileName: "rates.csv", preview: null, submissionKey: null });
+  assert.deepEqual(openingReadingImportSelectionChanged(null), { fileName: null, preview: null, submissionKey: null });
 });

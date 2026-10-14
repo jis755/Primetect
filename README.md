@@ -1151,6 +1151,72 @@ with `/api/properties` returning 403; and 390px mobile English/Bangla with no
 horizontal overflow. The running demo (`http://127.0.0.1:3041` / API
 `http://127.0.0.1:5041`) serves this UI.
 
+## Opening electricity reading import (2026-10-15)
+
+Admins can seed opening electricity baselines for a whole property in one step instead of opening each room by hand. The import lives in **Utility Bills -> Electricity -> Meter setup** and is visible only to an Admin.
+
+### Workflow
+
+1. Sign in as an Admin and open **Utility Bills -> Electricity**. In **Admin - Meter setup**, find **Import opening readings**.
+2. Download the property template as **CSV** (`template.csv`) or **Excel** (`template.xlsx`). The template lists every eligible room for the selected property.
+3. Fill `opening_reading` for the rooms that have a baseline. Leave a row blank to skip it.
+4. Choose the filled file and click **Validate file (preview)**. The preview lists every row as Ready, Skipped, Conflict, or Error. Previewing writes no application records.
+5. Click **Confirm import** to apply every ready row in a single transaction. A failed import is rolled back completely and never reports partial success.
+
+Changing the selected file clears the previous preview, so a stale preview can never be confirmed. Changing the property or month in the surrounding screen reloads the panel and its template.
+
+### Template fields
+
+Both formats share the same columns and are matched **by stable IDs only** - never by name or serial.
+
+| Column | Meaning |
+| --- | --- |
+| `template_version` | Template format version (`1`). Other versions are rejected. |
+| `property_id` | Stable property id; must match the property you are importing into. |
+| `property_name` | Human-readable only; not used for matching. |
+| `unit_id` | Stable unit id; the row is applied to this room. |
+| `unit_name` | Human-readable only; not used for matching. |
+| `meter_installation_id` | Active submeter id, or blank for a legacy room with no submeter. |
+| `meter_type` | Must be `Electricity`. |
+| `opening_reading` | The opening baseline. Blank means missing; `0` is a valid zero baseline. |
+| `reading_date` | `YYYY-MM-DD`. Its month must equal `first_billing_month`. |
+| `first_billing_month` | `YYYY-MM`; the first period the baseline starts from. |
+
+The CSV template is UTF-8 with a byte-order mark and standard RFC 4180 quoting. The Excel template has a `Readings` sheet plus a bilingual `Instructions` sheet; identifiers are stored as text, and it contains no formulas, macros, or external links.
+
+### Period convention and billing
+
+An opening baseline is **not** an approved monthly reading. It is the starting value for the first billing period. When a billing cycle is generated, electricity resolves its previous reading from the immediately preceding approved period; if none exists it falls back to the installation's opening baseline (`OpeningEntry`), and otherwise reports it as missing. `reading_date` must fall inside `first_billing_month`.
+
+A missing electricity rate never defaults to zero: the baseline is still stored, but the room's electricity line stays blocked until a rate is configured.
+
+### Eligibility and conflict rules
+
+A row is **Ready** when the room is an enabled, non-archived unit that either has an active submeter or a configured electricity charge, has no existing opening baseline or replacement opening, and has no billing period at or after `first_billing_month`. Rooms without a submeter are imported through the existing legacy-adoption path (identity unknown; no serial or installation date is invented).
+
+A row is **Conflict** or **Error** and blocks the whole file when, for example: the row belongs to another property; the unit or `meter_installation_id` is unknown or no longer active; the submeter already has an opening baseline or came from a replacement; the file has a duplicate unit row; a billing period already exists at or after the first billing month; the reading is negative or has more than four decimals; the date is ambiguous or in the wrong month; or the meter type is not electricity. Nothing is ever overwritten and no partial import is performed.
+
+### Limits
+
+- Upload size: 5 MB. Decompressed XLSX: 20 MB with at most 200 internal parts.
+- Rows per file: 500. Cell length: 200 characters.
+- Reading precision: four decimals, non-negative, up to 14 integer digits. Bangla and Arabic-Indic digits are normalized to ASCII.
+- Accepted upload types: `.csv` and `.xlsx`. Encrypted, macro-enabled, formula-bearing, or externally-linked workbooks are rejected; formulas are never evaluated, and spreadsheet formula-injection prefixes are neutralized in generated templates.
+- Templates use the maintained `CsvHelper` (Apache-2.0/MS-PL) and `ClosedXML` (MIT) libraries. Uploads are parsed in memory and are not retained; only the sanitized filename, a file hash, the validated content hash, counts, and the outcome are audited.
+
+### Authorization and audit
+
+The template endpoints, preview, and commit require the Admin role and are scoped to the requesting Admin's organization and property. Managers, Finance, building staff, and restricted password-recovery sessions receive 403. Each committed import records the actor, property, timestamp, sanitized filename, file hash, validated content hash, row count, imported count, and outcome - never the raw file contents. A submission key makes retries idempotent: re-submitting the same confirmation returns the original result without applying anything twice.
+
+Opening baselines may also be recorded directly on a single room under **Room submeter setup / adoption** when only one value is known.
+
+### Verification (2026-10-15)
+
+- Backend: the full API test suite passed (`dotnet test`), including new template/parser unit tests and end-to-end import tests (template round-trip, Bangla digits, CSV quoting/BOM, zero vs blank, stable-ID mapping, wrong-property/cross-org, duplicate rows, precision, formula/malformed/oversized files, existing-baseline and billing-history conflicts, stale previews, missing-rate baselines, atomic rollback, idempotent retries, successful import with correct first-period calculation, and Admin-only/restricted-recovery authorization).
+- Guarded PostgreSQL suite passed against a freshly generated disposable database (schema, unique submission-key index, and a persisted idempotent import).
+- Frontend: `npm run test:ui` and `npm run typecheck` passed; the production `npm run build` succeeded.
+- Real persisted browser acceptance (one worker, sequential, no mocked successes): 7 checks passed against a real API and the built UI, covering template download (UTF-8 BOM and stable unit id), preview, confirmation, the persisted baseline, and the blocked repeat upload.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:

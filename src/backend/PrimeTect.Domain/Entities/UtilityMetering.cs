@@ -215,6 +215,22 @@ public sealed class MeterInstallation
         FinalReadingUnavailable = finalReadingUnavailable;
         Version++;
     }
+
+    /// <summary>
+    /// Records an opening baseline on an installation that does not already have one. It never overwrites an
+    /// existing baseline, closing reading, or replacement opening, and it never invents installation history.
+    /// </summary>
+    public void SetOpeningBaseline(decimal openingReading, DateOnly openingReadingDate)
+    {
+        if (OpeningReading is not null)
+        {
+            throw new InvalidOperationException("This installation already has an opening baseline.");
+        }
+
+        OpeningReading = openingReading;
+        OpeningReadingDate = openingReadingDate;
+        Version++;
+    }
 }
 
 /// <summary>

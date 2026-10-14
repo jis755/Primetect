@@ -598,3 +598,58 @@ public sealed record MeterSetupResponse(
     IReadOnlyList<UtilityMainMeterResponse> MainMeters,
     IReadOnlyList<MeterInstallationResponse> Installations,
     IReadOnlyList<MeterInstallationAuditResponse> Audit);
+
+public sealed record OpeningReadingTemplateSummary(
+    Guid PropertyId,
+    string PropertyName,
+    string FirstBillingMonth,
+    int TemplateVersion,
+    int EligibleUnitCount);
+
+public sealed record OpeningReadingPreviewRow(
+    int RowNumber,
+    string UnitId,
+    string UnitName,
+    string? MeterInstallationId,
+    string Status,
+    decimal? OpeningReading,
+    string? ReadingDate,
+    string FirstBillingMonth,
+    bool UsesLegacyAdoption,
+    IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Notes);
+
+public sealed record OpeningReadingPreviewResponse(
+    Guid PropertyId,
+    string PropertyName,
+    string FileName,
+    string FileHash,
+    int RowCount,
+    int ReadyCount,
+    int SkippedCount,
+    int ConflictCount,
+    int ErrorCount,
+    bool CanCommit,
+    string PreviewToken,
+    DateTimeOffset ExpiresAtUtc,
+    string Message,
+    IReadOnlyList<OpeningReadingPreviewRow> Rows);
+
+public sealed record OpeningReadingImportResultRow(
+    int RowNumber,
+    string UnitId,
+    string UnitName,
+    decimal OpeningReading,
+    string ReadingDate,
+    string Message);
+
+public sealed record OpeningReadingCommitResponse(
+    Guid PropertyId,
+    string FileName,
+    int RowCount,
+    int ImportedCount,
+    string Outcome,
+    bool AlreadyImported,
+    DateTimeOffset OccurredAtUtc,
+    string Message,
+    IReadOnlyList<OpeningReadingImportResultRow> Rows);

@@ -136,3 +136,58 @@ export function replacementGuardMessage(serverMessage: string, language: "en" | 
 export function hasReplacementGuardTranslation(serverMessage: string) {
   return Object.prototype.hasOwnProperty.call(replacementGuardTranslations, serverMessage);
 }
+
+export type OpeningReadingImportRow = {
+  rowNumber: number;
+  unitId: string;
+  unitName: string;
+  status: string;
+  openingReading?: number | null;
+  readingDate?: string | null;
+  firstBillingMonth?: string;
+  usesLegacyAdoption?: boolean;
+  errors: string[];
+  notes: string[];
+};
+
+export type OpeningReadingImportPreview = {
+  canCommit: boolean;
+  readyCount: number;
+  skippedCount: number;
+  conflictCount: number;
+  errorCount: number;
+  previewToken: string;
+  fileName?: string;
+  fileHash?: string;
+  message?: string;
+  rows: OpeningReadingImportRow[];
+};
+
+/** Summarizes a validated opening-reading preview and whether its confirm button may be enabled. */
+export function summarizeOpeningReadingPreview(preview: OpeningReadingImportPreview) {
+  const blocking = (preview.errorCount ?? 0) + (preview.conflictCount ?? 0);
+  const ready = preview.readyCount ?? 0;
+  return {
+    ready,
+    skipped: preview.skippedCount ?? 0,
+    blocking,
+    canConfirm: Boolean(preview.canCommit) && ready > 0 && blocking === 0 && preview.previewToken.length > 0,
+    tone: blocking > 0 ? "danger" : ready > 0 ? "success" : "muted",
+  } as const;
+}
+
+/** Returns the first blocking message from a preview so the user sees why the whole file is rejected. */
+export function firstOpeningReadingImportError(preview: OpeningReadingImportPreview): string | null {
+  for (const row of preview.rows ?? []) {
+    if (row.status === "Error" || row.status === "Conflict") {
+      return row.errors[0] ?? null;
+    }
+  }
+  return null;
+}
+
+/** A fresh selection always invalidates the previous preview so a stale token can never be confirmed. */
+export function openingReadingImportSelectionChanged(fileName: string | null) {
+  return { fileName, preview: null as OpeningReadingImportPreview | null, submissionKey: null as string | null };
+}
+

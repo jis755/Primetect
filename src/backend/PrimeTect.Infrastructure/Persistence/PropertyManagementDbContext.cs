@@ -67,6 +67,8 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
 
     public DbSet<OrganizationAuditEntry> OrganizationAuditEntries => Set<OrganizationAuditEntry>();
 
+    public DbSet<OpeningReadingImport> OpeningReadingImports => Set<OpeningReadingImport>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -480,6 +482,19 @@ public sealed class PropertyManagementDbContext(DbContextOptions<PropertyManagem
             entity.HasIndex(audit => new { audit.OrganizationId, audit.TargetUserId, audit.OccurredAtUtc });
             entity.HasIndex(audit => new { audit.OrganizationId, audit.SubmissionKey }).IsUnique();
             entity.HasOne<Organization>().WithMany().HasForeignKey(audit => audit.OrganizationId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OpeningReadingImport>(entity =>
+        {
+            entity.ToTable("opening_reading_imports");
+            entity.HasKey(import => import.Id);
+            entity.Property(import => import.FileName).HasMaxLength(200).IsRequired();
+            entity.Property(import => import.FileHash).HasMaxLength(64).IsRequired();
+            entity.Property(import => import.ContentHash).HasMaxLength(64).IsRequired();
+            entity.Property(import => import.Outcome).HasMaxLength(40).IsRequired();
+            entity.HasIndex(import => new { import.OrganizationId, import.SubmissionKey }).IsUnique();
+            entity.HasIndex(import => new { import.OrganizationId, import.PropertyId, import.OccurredAtUtc });
+            entity.HasOne<Property>().WithMany().HasForeignKey(import => import.PropertyId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

@@ -110,6 +110,8 @@ public static class PrimeTectEndpointMapping
         secure.MapPost("/properties/{propertyId:guid}/meter-installations", (Delegate)CreateMeterInstallationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPut("/properties/{propertyId:guid}/meter-installations/{installationId:guid}", (Delegate)UpdateMeterInstallationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
         secure.MapPost("/properties/{propertyId:guid}/meter-installations/{installationId:guid}/replace", (Delegate)ReplaceMeterInstallationAsync).RequireAuthorization(policy => policy.RequireRole(nameof(UserRole.Admin)));
+
+        app.MapOpeningReadingImportEndpoints();
     }
 
     private static async Task<IResult> RegisterOwnerAsync(

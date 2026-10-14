@@ -3,7 +3,8 @@
 import { ApiHealth } from "@/components/api-health";
 import { LanguageProvider, useLanguage } from "@/components/language";
 import { API_BASE_URL, ApiError, apiFetch } from "@/lib/api";
-import { adoptMeterOcrSuggestion, authPanelTitle, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, registrationReady, registrationStepOneValid, replacementOpeningReadingValid, summarizeMeterProgress, visibleStaffTasks } from "@/lib/workspace-ui-logic";
+import { adoptMeterOcrSuggestion, authPanelTitle, isCurrentMeterPhotoResult, meterPhotoConfirmationRequired, meterPreviousReadingState, meterRoomAdvanceAfterSave, registrationReady, registrationStepOneValid, replacementOpeningReadingValid, summarizeMeterProgress, visibleStaffTasks, firstOpeningReadingImportError, openingReadingImportSelectionChanged, summarizeOpeningReadingPreview } from "@/lib/workspace-ui-logic";
+import type { OpeningReadingImportPreview } from "@/lib/workspace-ui-logic";
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -1269,7 +1270,107 @@ function MeterSetupWorkspace({ property, onError, onMessage }: { property: Prope
       <button type="submit" disabled={busy} className="mt-3 min-h-12 rounded-xl bg-pine px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{text("Replace meter", "মিটার প্রতিস্থাপন করুন")}</button>
     </form>
 
+    <OpeningReadingImportPanel propertyId={property.id} onError={onError} onMessage={onMessage} onImported={load} />
+
     {(setup?.audit ?? []).length > 0 && <div className="mt-5"><h4 className="text-sm font-black text-ink">{text("Installation audit", "স্থাপন অডিট")}</h4><ul className="mt-2 space-y-1 text-xs text-ink/60">{(setup?.audit ?? []).slice(-10).reverse().map((entry) => <li key={entry.id} className="rounded-lg bg-white px-3 py-2">{entry.action} · {entry.replacementDate ?? ""} · {entry.reason ?? ""} · {formatPropertyDateFromUtc(entry.occurredAtUtc, property.timeZoneId)}</li>)}</ul></div>}
+  </section>;
+}
+
+type OpeningReadingPreviewResponse = OpeningReadingImportPreview & { fileName: string; fileHash: string; message: string; rowCount: number };
+
+function OpeningReadingImportPanel({ propertyId, onError, onMessage, onImported }: { propertyId: string; onError: (message: string) => void; onMessage: (message: string) => void; onImported: () => void | Promise<void> }) {
+  const { text, error: localizedError } = useLanguage();
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState<"idle" | "previewing" | "importing">("idle");
+  const [preview, setPreview] = useState<OpeningReadingPreviewResponse | null>(null);
+  const [submissionKey, setSubmissionKey] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<"csv" | "xlsx" | null>(null);
+  const summary = preview ? summarizeOpeningReadingPreview(preview) : null;
+  const busy = status !== "idle";
+
+  function selectFile(selected: File | null) {
+    const reset = openingReadingImportSelectionChanged(selected?.name ?? null);
+    setFile(selected);
+    setPreview(null);
+    setSubmissionKey(reset.submissionKey);
+  }
+
+  async function downloadTemplate(format: "csv" | "xlsx") {
+    if (busy || downloading) return;
+    setDownloading(format);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/properties/${propertyId}/meter-setup/opening-readings/template.${format}`, { credentials: "include" });
+      if (!response.ok) throw new ApiError(response.status, text("Could not download the template.", "টেমপ্লেট ডাউনলোড করা যায়নি।"));
+      const blob = await response.blob();
+      const match = /filename="?([^";]+)"?/i.exec(response.headers.get("content-disposition") ?? "");
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = match?.[1] ?? `opening-readings.${format}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (caught) { onError(localizedError(caught, "Could not download the template.")); }
+    finally { setDownloading(null); }
+  }
+
+  async function previewFile() {
+    if (!file || busy) return;
+    setStatus("previewing");
+    try {
+      const csrf = await apiFetch<{ token: string }>("/api/auth/csrf");
+      const form = new FormData();
+      form.append("file", file);
+      const result = await apiFetch<OpeningReadingPreviewResponse>(`/api/properties/${propertyId}/meter-setup/opening-readings/preview`, { method: "POST", headers: { "X-CSRF-TOKEN": csrf.token }, body: form });
+      setPreview(result);
+      if (result.canCommit) { setSubmissionKey(globalThis.crypto.randomUUID()); onMessage(result.message); }
+      else { setSubmissionKey(null); onError(firstOpeningReadingImportError(result) ?? result.message); }
+    } catch (caught) { setPreview(null); setSubmissionKey(null); onError(localizedError(caught, "Could not validate the file. Nothing has been imported.")); }
+    finally { setStatus("idle"); }
+  }
+
+  async function confirmImport() {
+    if (!preview || !summary?.canConfirm || busy || !submissionKey) return;
+    setStatus("importing");
+    try {
+      const csrf = await apiFetch<{ token: string }>("/api/auth/csrf");
+      const form = new FormData();
+      form.append("previewToken", preview.previewToken);
+      form.append("submissionKey", submissionKey);
+      form.append("fileHash", preview.fileHash);
+      const result = await apiFetch<{ message: string }>(`/api/properties/${propertyId}/meter-setup/opening-readings/commit`, { method: "POST", headers: { "X-CSRF-TOKEN": csrf.token }, body: form });
+      onMessage(result.message);
+      selectFile(null);
+      await onImported();
+    } catch (caught) { onError(localizedError(caught, "Could not import the file. No opening readings were changed.")); }
+    finally { setStatus("idle"); }
+  }
+
+  const statusLabel = (value: string) => value === "Ready" ? text("Ready", "প্রস্তুত") : value === "Skipped" ? text("Skipped", "বাদ") : value === "Conflict" ? text("Conflict", "সাংঘর্ষিক") : text("Error", "ভুল");
+
+  return <section data-opening-reading-import="true" className="mt-5 rounded-2xl border border-pine/20 bg-white p-4">
+    <h4 className="text-base font-black text-ink">{text("Import opening readings", "প্রারম্ভিক রিডিং আমদানি")}</h4>
+    <p className="mt-1 text-xs leading-5 text-ink/55">{text("Download the property template, fill the opening baseline for each eligible room, then validate and confirm. Nothing is imported until you confirm, and an invalid or conflicting row blocks the whole file. Blank means missing, not zero; enter 0 when a meter truly starts at zero. Opening baselines are not approved monthly readings.", "প্রপার্টির টেমপ্লেট ডাউনলোড করুন, প্রতিটি উপযুক্ত রুমের প্রারম্ভিক রিডিং পূরণ করুন, তারপর যাচাই করে নিশ্চিত করুন। আপনি নিশ্চিত না করলে কিছুই আমদানি হয় না, এবং কোনো ভুল বা সাংঘর্ষিক সারি পুরো ফাইল আটকে দেয়। খালি মানে অনুপস্থিত, শূন্য নয়; মিটার সত্যিই শূন্য থেকে শুরু হলে 0 লিখুন। প্রারম্ভিক বেসলাইন অনুমোদিত মাসিক রিডিং নয়।")}</p>
+    <div className="mt-3 flex flex-wrap gap-2">
+      <button type="button" disabled={busy || downloading !== null} onClick={() => void downloadTemplate("csv")} className="min-h-11 rounded-xl border border-pine/30 bg-mint/30 px-4 py-2 text-sm font-bold text-pine disabled:opacity-50">{downloading === "csv" ? text("Downloading…", "ডাউনলোড হচ্ছে…") : text("Download CSV template", "CSV টেমপ্লেট ডাউনলোড")}</button>
+      <button type="button" disabled={busy || downloading !== null} onClick={() => void downloadTemplate("xlsx")} className="min-h-11 rounded-xl border border-pine/30 bg-mint/30 px-4 py-2 text-sm font-bold text-pine disabled:opacity-50">{downloading === "xlsx" ? text("Downloading…", "ডাউনলোড হচ্ছে…") : text("Download Excel template", "Excel টেমপ্লেট ডাউনলোড")}</button>
+    </div>
+    <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+      <label className="block text-sm font-bold text-ink">{text("Choose a filled CSV or XLSX file", "পূরণ করা CSV বা XLSX ফাইল বেছে নিন")}<input type="file" accept=".csv,.xlsx" disabled={busy} onChange={(event) => selectFile(event.currentTarget.files?.[0] ?? null)} className="mt-2 block w-full rounded-xl border border-ink/10 bg-white px-3 py-2 text-sm font-normal" /></label>
+      <button type="button" disabled={!file || busy} onClick={() => void previewFile()} className="min-h-11 rounded-xl bg-pine px-5 py-2 text-sm font-bold text-white disabled:opacity-50">{status === "previewing" ? text("Validating…", "যাচাই হচ্ছে…") : text("Validate file (preview)", "ফাইল যাচাই করুন (প্রিভিউ)")}</button>
+    </div>
+    {file && <p className="mt-2 text-xs text-ink/50">{text("Changing the file clears the previous preview.", "ফাইল পরিবর্তন করলে আগের প্রিভিউ মুছে যায়।")} · {file.name}</p>}
+
+    {preview && summary && <div className="mt-4 rounded-xl border border-ink/10 bg-sand/30 p-3">
+      <p className="text-sm font-bold text-ink">{text("Preview", "প্রিভিউ")} · {preview.fileName}</p>
+      <p className="mt-1 text-xs text-ink/60">{text(`Ready ${summary.ready} · Skipped ${summary.skipped} · Blocking ${summary.blocking}`, `প্রস্তুত ${summary.ready} · বাদ ${summary.skipped} · বাধা ${summary.blocking}`)}</p>
+      <div className="mt-2 overflow-x-auto rounded-xl border border-ink/10 bg-white">
+        <table className="w-full min-w-[640px] text-left text-xs"><thead className="border-b border-ink/10 bg-sand/60"><tr>{[text("Row", "সারি"), text("Room", "রুম"), text("Status", "অবস্থা"), text("Opening", "শুরু"), text("Date", "তারিখ"), text("Notes", "মন্তব্য")].map((label) => <th key={label} className="p-2">{label}</th>)}</tr></thead>
+          <tbody>{preview.rows.map((row) => <tr key={`${row.rowNumber}-${row.unitId}`} className="border-b border-ink/5 last:border-0"><td className="p-2">{row.rowNumber}</td><td className="p-2 font-bold text-ink">{row.unitName}</td><td className={`p-2 font-semibold ${row.status === "Ready" ? "text-pine" : row.status === "Skipped" ? "text-ink/50" : "text-red-600"}`}>{statusLabel(row.status)}</td><td className="p-2">{typeof row.openingReading === "number" ? money(row.openingReading) : "—"}</td><td className="p-2">{row.readingDate ?? "—"}</td><td className="p-2 text-ink/60">{[...(row.errors ?? []), ...(row.notes ?? [])].join(" ") || "—"}</td></tr>)}</tbody></table>
+      </div>
+      <button type="button" disabled={!summary.canConfirm || busy} onClick={() => void confirmImport()} className="mt-3 min-h-12 rounded-xl bg-pine px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{status === "importing" ? text("Importing…", "আমদানি হচ্ছে…") : text("Confirm import", "আমদানি নিশ্চিত করুন")}</button>
+    </div>}
   </section>;
 }
 

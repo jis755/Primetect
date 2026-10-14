@@ -2,6 +2,7 @@ using System.Data;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.DataProtection;
@@ -91,9 +92,9 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
 
             var applied = await context.Database.GetAppliedMigrationsAsync();
             var pending = await context.Database.GetPendingMigrationsAsync();
-            if (applied.Count() != 13 || pending.Any())
+            if (applied.Count() != 14 || pending.Any())
             {
-                throw new InvalidOperationException($"Expected thirteen applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
+                throw new InvalidOperationException($"Expected fourteen applied migrations and no pending migrations, found {applied.Count()} applied and {pending.Count()} pending.");
             }
         }
         catch (Exception exception)
@@ -298,7 +299,7 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         RequirePostgres();
 
         await using var connection = await database.OpenConnectionAsync();
-        Assert.Equal(13L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
+        Assert.Equal(14L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM \"__EFMigrationsHistory\""));
 
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "charge_configurations", "Amount"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_charge_lines", "RateSnapshot"));
@@ -327,6 +328,67 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "meter_installations", "OpeningReading"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_meter_segments", "PreviousReading"));
         Assert.Equal((18, 4), await NumericDefinitionAsync(connection, "billing_meter_segments", "ConsumptionUnits"));
+    }
+
+    [PostgresFact]
+    public async Task Opening_reading_import_schema_and_idempotent_persistence_are_verified()
+    {
+        RequirePostgres();
+
+        await using (var connection = await database.OpenConnectionAsync())
+        {
+            Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'opening_reading_imports'"));
+            Assert.Equal(1L, await ScalarAsync<long>(connection, "SELECT COUNT(*) FROM pg_indexes WHERE tablename = 'opening_reading_imports' AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%SubmissionKey%'"));
+        }
+
+        using var api = new PostgresPrimeTectApiFactory(database.ConnectionString);
+        using var admin = api.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        await RegisterAsync(admin, $"opening-pg-admin-{suffix}@example.test", "Opening Reading Admin");
+
+        var property = await ReadAsync<PropertyResponse>(await admin.PostAsJsonAsync("/api/properties", new
+        {
+            name = $"Opening Property {suffix}",
+            address = "3 Meter Street",
+            propertyType = "ApartmentBuilding",
+            timeZoneId = "Asia/Dhaka",
+            floors = new[] { new { name = "Ground", unitCount = 1, unitNames = new[] { "1A" } } },
+        }));
+        var unit = property.Floors.Single().Units.Single();
+        await PutChargesAsync(admin, property.Id, new[] { new { chargeType = "Electricity", mode = "Custom", billingMonth = "2025-12-01", amount = (decimal?)10m, customLabel = (string?)null } });
+        var tenant = await ReadAsync<TenantResponse>(await admin.PostAsJsonAsync("/api/tenants", new { name = "Opening Tenant", phone = (string?)null }));
+        Assert.Equal(HttpStatusCode.Created, (await admin.PostAsJsonAsync($"/api/properties/{property.Id}/units/{unit.Id}/occupancy", new { tenantId = tenant.Id, startDate = "2025-12-01", endDate = (string?)null })).StatusCode);
+
+        var csrf = await ReadAsync<CsrfResponse>(await admin.GetAsync("/api/auth/csrf"));
+        var content = OpeningCsvBytes(property.Id, unit.Id, "1500", "2026-02-05", "2026-02");
+        var preview = await ReadAsync<OpeningReadingPreviewPgResponse>(await OpeningPreviewAsync(admin, csrf.Token, property.Id, content));
+        Assert.True(preview.CanCommit);
+        Assert.NotEmpty(preview.PreviewToken);
+
+        var submissionKey = Guid.NewGuid();
+        var first = await ReadAsync<OpeningReadingCommitPgResponse>(await OpeningCommitAsync(admin, csrf.Token, property.Id, preview.PreviewToken, submissionKey));
+        Assert.False(first.AlreadyImported);
+        Assert.Equal(1, first.ImportedCount);
+
+        var second = await ReadAsync<OpeningReadingCommitPgResponse>(await OpeningCommitAsync(admin, csrf.Token, property.Id, preview.PreviewToken, submissionKey));
+        Assert.True(second.AlreadyImported);
+
+        var setup = await ReadAsync<MeterSetupPgResponse>(await admin.GetAsync($"/api/properties/{property.Id}/meter-setup"));
+        var installation = setup.Installations.Single();
+        Assert.Equal(1500m, installation.OpeningReading);
+        Assert.False(installation.IdentityKnown);
+        Assert.Null(installation.SerialNumber);
+
+        var cycle = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-02-01" }));
+        var electricity = cycle.Bills.Single().Charges.Single();
+        Assert.Equal(MeterReadingSource.OpeningEntry, electricity.PreviousReadingSource);
+        Assert.Equal(1500m, electricity.PreviousReading);
+
+        await using (var connection = await database.OpenConnectionAsync())
+        {
+            Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM opening_reading_imports WHERE \"PropertyId\" = '{property.Id}'"));
+            Assert.Equal(1L, await ScalarAsync<long>(connection, $"SELECT COUNT(*) FROM meter_installations WHERE \"UnitId\" = '{unit.Id}' AND \"OpeningReading\" = 1500"));
+        }
     }
 
     [PostgresFact]
@@ -571,6 +633,35 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
         form.Add(file, "file", "meter.png");
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/properties/{propertyId}/billing-cycles/{billingCycleId}/meter-photos/{unitBillId}") { Content = form };
+        request.Headers.Add("X-CSRF-TOKEN", csrfToken);
+        return await client.SendAsync(request);
+    }
+
+    private static byte[] OpeningCsvBytes(Guid propertyId, Guid unitId, string reading, string date, string month)
+    {
+        var builder = new StringBuilder();
+        builder.Append("template_version,property_id,property_name,unit_id,unit_name,meter_installation_id,meter_type,opening_reading,reading_date,first_billing_month\r\n");
+        builder.Append($"1,{propertyId},Property,{unitId},{unitId},,Electricity,{reading},{date},{month}\r\n");
+        return new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetBytes(builder.ToString());
+    }
+
+    private static async Task<HttpResponseMessage> OpeningPreviewAsync(HttpClient client, string csrfToken, Guid propertyId, byte[] content)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(content);
+        file.Headers.ContentType = new MediaTypeHeaderValue("text/csv");
+        form.Add(file, "file", "opening-readings.csv");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/properties/{propertyId}/meter-setup/opening-readings/preview") { Content = form };
+        request.Headers.Add("X-CSRF-TOKEN", csrfToken);
+        return await client.SendAsync(request);
+    }
+
+    private static async Task<HttpResponseMessage> OpeningCommitAsync(HttpClient client, string csrfToken, Guid propertyId, string previewToken, Guid submissionKey)
+    {
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(previewToken), "previewToken");
+        form.Add(new StringContent(submissionKey.ToString()), "submissionKey");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/properties/{propertyId}/meter-setup/opening-readings/commit") { Content = form };
         request.Headers.Add("X-CSRF-TOKEN", csrfToken);
         return await client.SendAsync(request);
     }
@@ -1419,6 +1510,16 @@ public sealed class PostgresBillingVerificationTests : IClassFixture<PostgresVer
         await using var command = new NpgsqlCommand(sql, connection);
         return (T)(await command.ExecuteScalarAsync())!;
     }
+
+    private sealed record MeterSetupPgResponse(List<MeterInstallationPgResponse> Installations);
+
+    private sealed record OpeningReadingPreviewPgResponse(Guid PropertyId, string PropertyName, string FileName, string FileHash, int RowCount, int ReadyCount, int SkippedCount, int ConflictCount, int ErrorCount, bool CanCommit, string PreviewToken, DateTimeOffset ExpiresAtUtc, string Message, List<OpeningReadingPreviewRowPg> Rows);
+
+    private sealed record OpeningReadingPreviewRowPg(int RowNumber, string UnitId, string UnitName, string? MeterInstallationId, string Status, decimal? OpeningReading, string? ReadingDate, string FirstBillingMonth, bool UsesLegacyAdoption, List<string> Errors, List<string> Notes);
+
+    private sealed record OpeningReadingCommitPgResponse(Guid PropertyId, string FileName, int RowCount, int ImportedCount, string Outcome, bool AlreadyImported, DateTimeOffset OccurredAtUtc, string Message, List<OpeningReadingImportResultRowPg> Rows);
+
+    private sealed record OpeningReadingImportResultRowPg(int RowNumber, string UnitId, string UnitName, decimal OpeningReading, string ReadingDate, string Message);
 
     private sealed record PropertyResponse(Guid Id, string Name, string Address, PropertyType PropertyType, bool IsArchived, List<FloorResponse> Floors);
 
