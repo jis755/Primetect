@@ -1217,6 +1217,47 @@ Opening baselines may also be recorded directly on a single room under **Room su
 - Frontend: `npm run test:ui` and `npm run typecheck` passed; the production `npm run build` succeeded.
 - Real persisted browser acceptance (one worker, sequential, no mocked successes): 7 checks passed against a real API and the built UI, covering template download (UTF-8 BOM and stable unit id), preview, confirmation, the persisted baseline, and the blocked repeat upload.
 
+## Dependency upgrade: Next 16 + Tailwind 4 (2026-10-18)
+
+The follow-up recorded under **npm audit review** below was completed: the
+frontend toolchain was migrated in one small, fully verified change and the
+working tree reports **0 audit vulnerabilities** (previously 3 moderate and 6
+high findings).
+
+- `next` 15.5.27 → **16.4.2** (Turbopack is now the default dev/bundler
+  toolchain), `react`/`react-dom` → **19.3.1**.
+- `tailwindcss` 3.4.19 → **4.3.3** with `@tailwindcss/postcss`; the direct
+  `postcss` and `autoprefixer` devDependencies were removed (Tailwind v4
+  packages its own PostCSS plugin and prefixing). The vulnerable nested
+  `postcss@8.4.31` copy under Next and the vulnerable chokidar/fast-glob/
+  micromatch/braces chain brought in by Tailwind 3 no longer exist in the tree.
+- `tailwind.config.ts` was deleted; its theme tokens moved into
+  `app/globals.css` as CSS-first configuration (`@import "tailwindcss";` plus
+  an `@theme` block holding the `ink`/`pine`/`mint`/`sand`/`sun` colors and the
+  `shadow-soft` shadow). Observability of custom utilities was verified in the
+  compiled dev CSS (`.bg-pine` resolves to `var(--color-pine)` and
+  `.shadow-soft` to the token value).
+- Next 16 regenerated `next-env.d.ts` (dev routes types) and set the mandatory
+  `tsconfig.json` `jsx: react-jsx`; it also generates
+  `src/frontend/AGENTS.md`, which is committed so repeated dev runs keep a
+  clean tree (`agentRules: false` in `next.config.mjs` would disable it).
+
+Verification (sequential):
+
+- `npm run typecheck` — clean.
+- `npm run test:ui` — 20 passed, 0 failed.
+- `npm run build` — production build succeeded on Next.js 16.4.2 (Turbopack).
+- `npm audit` — **0 vulnerabilities**.
+- Dev-server smoke check on a free loopback pair (3071) confirmed HTTP 200,
+  rendered PrimeTect content, and compiled Tailwind v4 theme utilities; the
+  confirmed node listener was then stopped. No database, demo process, or
+  tracked `.env.local` was touched. App code (all four components, the single
+  route, and `lib/`) needed no source changes; the usage surface already
+  specified explicit border colors and v4-compatible class names.
+
+The application remains on Node 20+ and the backend was not modified by this
+work.
+
 ## npm audit review
 
 The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical findings. They are in the frontend build dependency graph:
@@ -1225,7 +1266,7 @@ The current lockfile reports 9 findings: 3 moderate and 6 high, with no critical
 - `tailwindcss@3.4.19` brings `chokidar`, `fast-glob`, `micromatch`, `braces`, `postcss-nested`, and `postcss-selector-parser`. The reported issues affect CSS scanning/parsing and build-time file/pattern processing, not shipped application records. npm proposes `tailwindcss@4.3.3`, a major Tailwind migration.
 - The direct `postcss` package is already at `8.5.29`; the remaining PostCSS finding is the nested copy under Next.
 
-No `npm audit fix --force` or blind major upgrade was applied. The recommended follow-up is a planned Next 16/Tailwind 4 migration with a visual regression pass, or a targeted dependency update when compatible releases are confirmed.
+No `npm audit fix --force` or blind major upgrade was applied. The recommended follow-up is a planned Next 16/Tailwind 4 migration with a visual regression pass, or a targeted dependency update when compatible releases are confirmed. (Follow-up completed 2026-10-18; see **Dependency upgrade: Next 16 + Tailwind 4 (2026-10-18)** above.)
 
 ## Step 2: secure meter links, photos, and optional locations
 

@@ -1,6 +1,15 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Theme tokens moved to CSS-first configuration (Tailwind v4); the v3
+   tailwind.config.ts was removed because v4 discovers sources automatically. */
+@theme {
+  --color-ink: #10231f;
+  --color-pine: #174c40;
+  --color-mint: #dff3e9;
+  --color-sand: #f6f2e8;
+  --color-sun: #e8b65a;
+  --shadow-soft: 0 22px 60px rgba(16, 35, 31, 0.10);
+}
 
 :root {
   color-scheme: light;
