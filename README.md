@@ -1401,3 +1401,129 @@ Supported upload formats are JPEG, PNG, and WebP. HEIC is intentionally unsuppor
 5. Add optional coordinates for one property and open the directions link; leave an unknown property's coordinates empty / অবস্থান ঐচ্ছিক।
 
 For phone testing, `127.0.0.1` works only on the PC. A separate phone requires a private LAN hostname/IP in `PublicAppBaseUrl`, matching `AllowedOrigins`, and `NEXT_PUBLIC_API_BASE_URL`, with the API/frontend bound for that LAN. Do not open a public tunnel or change the firewall. Camera capture may require a secure browser context; LAN camera behavior and HEIC rejection still need real-device verification.
+
+## Configuration hygiene, opening-period convention, and post-upgrade regression (2026-10-21)
+
+This milestone is bounded to configuration tracking, the opening electricity reading
+period convention, disposable-database connection guards, and a real-browser regression
+pass after the Next 16 / React 19 / Tailwind 4 upgrade. No feature was added.
+
+### Configuration tracking findings
+
+- `src/frontend/.env.local` is **not tracked**. It is matched by the repository
+  `.gitignore` rule `.env.*` (with `!.env.example`), so `git status` stays clean and
+  `git check-ignore` reports the ignore source. Only `NEXT_PUBLIC_API_BASE_URL` is set
+  there. That variable is browser-visible (it is compiled into the client bundle), so it
+  is a public API origin, **not a secret**; no value was copied into any tracked file.
+- No environment, credential, or connection-string file was **ever** committed: a
+  history scan for added paths matching `env.local`, `.env`, `secret`, `credential`,
+  `.pfx`, `.pem`, or `.key` found no tracked secret material. **No credential rotation
+  is required.** History was not rewritten and no external credential was changed.
+- Sanitized, tracked examples already exist: `.env.example`, `src/frontend/.env.example`,
+  and `src/backend/PrimeTect.Api/appsettings.example.json` (placeholder password
+  `change-me-local-only`). Local credentials remain in ignored files
+  (`appsettings.*.Local.json`, `*.secret.json`, `*.credentials*.json`, `appsettings.Development.json`).
+
+### Opening-period convention (confirmed and aligned)
+
+The established convention, with repository evidence:
+
+- The selected billing month is the month in which the bill is **issued**. Meter
+  consumption is the immediately preceding period's current reading to the selected
+  period's current reading (`PlanMeterSegments`: `periodStart = cycle.BillingMonth`,
+  `periodEnd = BillingMonth.AddMonths(1).AddDays(-1)`). The documented example — 10020 on
+  1 January and 10040 on 1 February is 20 units on the February-issued bill — is the
+  reference.
+- The **manual** opening-entry workflow records an opening baseline with an arbitrary
+  `OpeningReadingDate`; it only rejects a negative opening value. The billing engine uses
+  the opening **value** as the first period's previous reading and never allocates usage by
+  the opening date.
+
+The import validator previously required `reading_date` to fall in the **same month** as
+`first_billing_month`. That contradicted the manual workflow and the documented convention:
+a 30 September baseline that starts the October bill, or a 1 January baseline that starts
+the February bill, was rejected even though the manual path accepts it. The import now
+accepts a `reading_date` within `first_billing_month` **or the month immediately before it**,
+which covers both cases without permitting a date after the first period (that would span a
+missing period, so it stays blocked). Global billing-month semantics were not changed.
+Regression tests: `Opening_reading_dated_on_the_preceding_period_boundary_starts_the_first_billing_month`
+(30 September → October, verified through billing), `Opening_reading_dated_in_the_month_of_the_first_billing_month_is_accepted`
+(1 January → February), and `Opening_reading_dated_after_the_first_billing_month_is_rejected_as_a_missing_period`.
+The CSV/XLSX instruction text was updated to match. Replacement openings remain excluded
+from the initial import.
+
+### Provisioning vs application connection safeguards
+
+Two distinct connections are guarded (see `PostgresVerificationGuard`):
+
+- The **provisioning** connection (environment variable
+  `PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION`) may target only a local server
+  (`localhost`/`127.0.0.1`/`::1`) and the administrative database `postgres` or
+  `template1`, with a username present.
+- The **application/test** connection must target exactly the generated
+  `primetect_verification_<32 hex>` database. `EnsureApplicationTarget` is asserted before
+  any socket is opened, and `PostgresPrimeTectApiFactory` now re-validates the effective
+  connection string (including its DI configuration override) in its constructor, so
+  `primetect`, an existing demo database, the provisioning database, or any other target is
+  refused before the host opens a connection.
+
+Negative coverage runs without any server or connection:
+`PostgresVerificationGuardTests` proves the factory rejects `primetect`, an existing demo
+name, `postgres`, and `template1`; rejects a generated name that is not the expected
+target; and accepts the exact generated target. The guard tests never connect to a
+forbidden database, and the suite still drops only its own generated database.
+
+### PostgreSQL-backed browser regression (2026-10-21)
+
+A fresh disposable database `primetect_milestone_20261021_07f407ab` was created on the
+local PostgreSQL 18 server and had **all 14 committed migrations** applied to it only (38
+tables). The existing `primetect` database and every earlier demo were not connected to,
+migrated, or modified. Private synthetic photo storage was configured under
+`src/backend/PrimeTect.Api/App_Data/milestone-<db>` (ignored). The current Release API ran
+on `http://127.0.0.1:5071` and the current **production** frontend build (Next.js 16.4.2,
+Turbopack) on `http://127.0.0.1:3061` from an isolated copy under `%TEMP%\primetect-fe-3061`,
+so no existing `.next` dev cache was disturbed. Synthetic data was seeded only through the
+real HTTP APIs. Playwright 1.64.0 (one worker, sequential) ran 14 checks with **no mocked
+successful mutations** — every mutation was confirmed through a persisted API/database read:
+
+- Owner registration; Admin email login; staff invitation acceptance; forced
+  temporary-password change with `/api/properties` returning 403 during the restricted
+  session and normal login afterwards (the password was changed for real, so the seeded
+  staff password no longer works).
+- Staff **My Work** permission cards and the বাংলা/English switch; 390px mobile with no
+  horizontal overflow and the primary/bottom navigation present.
+- Meter entry **Save & Next** persisted (G-01 = 10040, January→February) and reloaded.
+- Opening-reading CSV download (UTF-8 BOM, exact header, stable Annex unit ids) and XLSX
+  download (zip container), UI preview → confirm, and a persisted **30 September** baseline
+  for the **October** first billing month.
+- Replacement segments persist as 20 + 15 = 35 and the missing-final-reading room is
+  review-blocked; a partial collection report pends, self-approval returns 403, and Finance
+  approves it independently; feedback reaches the Admin notification bell and is marked read
+  without resolving the report; a repeat opening upload conflicts and a repeated submission
+  key returns the original result idempotently; the downloaded XLSX parses through the real
+  ClosedXML reader.
+- Print media uses the A4 `@page` rule and hides `.no-print` chrome.
+
+**Not verified by desktop automation:** real-phone camera capture, QR scanning on another
+device, real-meter OCR accuracy, SMS/email delivery, and deployment. `npm audit` reporting
+zero findings does not establish complete application security.
+
+### Checks run in this milestone (sequential)
+
+| Check | Result |
+| --- | --- |
+| Frontend UI tests (`npm run test:ui`) | 20 passed, 0 failed |
+| Frontend typecheck (`npm run typecheck`) | clean |
+| Frontend production build (`npm run build`) | Next.js 16.4.2 (Turbopack) succeeded |
+| Backend build (`dotnet build -c Release`) | 0 warnings, 0 errors |
+| Backend tests (`dotnet test -c Release`) | 99 passed, 13 skipped (PostgreSQL) |
+| Guarded PostgreSQL suite (generated disposable DB) | 13 passed, 0 failed |
+| Browser regression (real API + PostgreSQL, one worker) | 14 passed, 0 failed |
+| `npm audit` (frontend) | 0 vulnerabilities |
+
+### Remaining work
+
+Physical-device camera capture, external QR scanning, and real-meter OCR accuracy remain
+pending and require a reachable device and a real meter. Durable private photo storage,
+backup/retention, and deployment remain unimplemented. The applied-migration status of the
+local `primetect` database remains **unknown** and was not inspected or changed.

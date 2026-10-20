@@ -569,9 +569,9 @@ public static class OpeningReadingImportEndpoints
             {
                 errors.Add("reading_date must use the YYYY-MM-DD format.");
             }
-            else if (monthOk && (parsedDate.Year != firstMonth.Year || parsedDate.Month != firstMonth.Month))
+            else if (monthOk && !IsOpeningReadingDateSupported(parsedDate, firstMonth))
             {
-                errors.Add("reading_date must fall within the first_billing_month.");
+                errors.Add("reading_date must fall within the first_billing_month or the month immediately before it. A baseline observed after that period would span a missing period.");
             }
             else
             {
@@ -664,6 +664,21 @@ public static class OpeningReadingImportEndpoints
             usesLegacyAdoption,
             errors,
             notes);
+    }
+
+    /// <summary>
+    /// The opening baseline starts the first billing period, so its observation date may fall inside that period or
+    /// on the immediately preceding period boundary (for example, a 30 September reading that starts the October
+    /// bill, or a 1 January reading that starts the February bill). This matches the manual opening-entry workflow,
+    /// which never ties the opening date to a billing month, and the documented convention that the previous reading
+    /// is dated in the period immediately before the issued bill. A reading dated after the first billing period is
+    /// still rejected because it would silently span one or more missing periods.
+    /// </summary>
+    private static bool IsOpeningReadingDateSupported(DateOnly readingDate, DateOnly firstOfMonth)
+    {
+        var windowStart = firstOfMonth.AddMonths(-1);
+        var windowEnd = firstOfMonth.AddMonths(1).AddDays(-1);
+        return readingDate >= windowStart && readingDate <= windowEnd;
     }
 
     private static HashSet<Guid> DuplicateUnitIds(IReadOnlyList<ParsedOpeningReadingRow> rows)

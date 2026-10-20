@@ -108,7 +108,7 @@ public static class OpeningReadingTemplateBuilder
             (context.TemplateVersion.ToString(CultureInfo.InvariantCulture), context.TemplateVersion.ToString(CultureInfo.InvariantCulture)),
             ("Fill opening_reading with the meter's baseline. Leave blank if there is no baseline to record.", "মিটারের প্রারম্ভিক রিডিং opening_reading-এ লিখুন। রিডিং না থাকলে খালি রাখুন।"),
             ("Enter zero as 0 when the meter legitimately started at zero. Blank means missing, not zero.", "মিটার সত্যিই শূন্য থেকে শুরু হলে 0 লিখুন। খালি মানে অনুপস্থিত, শূন্য নয়।"),
-            ("Use reading_date in YYYY-MM-DD form; its month must match first_billing_month.", "reading_date অবশ্যই YYYY-MM-DD আকারে দিন; এর মাস first_billing_month-এর সাথে মিলতে হবে।"),
+            ("Use reading_date in YYYY-MM-DD form; it must fall within first_billing_month or the month immediately before it.", "reading_date অবশ্যই YYYY-MM-DD আকারে দিন; এটি first_billing_month বা তার ঠিক আগের মাসের মধ্যে হতে হবে।"),
             ("Use first_billing_month in YYYY-MM form.", "first_billing_month অবশ্যই YYYY-MM আকারে দিন।"),
             ("Match rows by unit_id and meter_installation_id. Do not edit or rename identifier columns.", "unit_id এবং meter_installation_id দিয়ে সারি মেলানো হয়। আইডি কলাম সম্পাদনা বা নাম পরিবর্তন করবেন না।"),
             ("Do not add, reorder, or rename columns, and do not add sheets.", "কলাম যোগ, পুনর্বিন্যাস বা নাম পরিবর্তন করবেন না, এবং নতুন শিট যোগ করবেন না।"),

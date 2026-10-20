@@ -157,14 +157,8 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
         return builder.ConnectionString;
     }
 
-    private void EnsureGeneratedDatabaseTarget(string connectionString, string expectedDatabaseName)
-    {
-        var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(builder.Database, expectedDatabaseName, StringComparison.Ordinal) || !IsSafeGeneratedName(builder.Database ?? string.Empty))
-        {
-            throw new InvalidOperationException("The effective PostgreSQL verification connection must target only the generated disposable database.");
-        }
-    }
+    private static void EnsureGeneratedDatabaseTarget(string connectionString, string expectedDatabaseName)
+        => PostgresVerificationGuard.EnsureApplicationTarget(connectionString, expectedDatabaseName);
 
     private async Task DropCreatedDatabaseAsync()
     {
@@ -197,26 +191,33 @@ public sealed class PostgresVerificationDatabase : IAsyncLifetime
     }
 
     private static bool IsSafeLocalAdminTarget(NpgsqlConnectionStringBuilder builder)
-    {
-        var database = builder.Database?.Trim();
-        var host = builder.Host?.Trim().ToLowerInvariant();
-        return (string.Equals(database, "postgres", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(database, "template1", StringComparison.OrdinalIgnoreCase))
-            && (host is "localhost" or "127.0.0.1" or "::1")
-            && !string.IsNullOrWhiteSpace(builder.Username);
-    }
+        => PostgresVerificationGuard.IsSafeLocalAdminTarget(builder);
 
     private static bool IsSafeGeneratedName(string name)
-        => name.StartsWith("primetect_verification_", StringComparison.Ordinal)
-           && name.Length == "primetect_verification_".Length + 32
-           && name["primetect_verification_".Length..].All(Uri.IsHexDigit);
+        => PostgresVerificationGuard.IsSafeGeneratedDatabaseName(name);
 
     private static string QuoteIdentifier(string identifier)
         => $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
 }
 
-public sealed class PostgresPrimeTectApiFactory(string connectionString) : WebApplicationFactory<Program>
+public sealed class PostgresPrimeTectApiFactory : WebApplicationFactory<Program>
 {
+    private readonly string connectionString;
+
+    /// <param name="connectionString">The application/test connection string.</param>
+    /// <param name="expectedDatabaseName">The exact generated database the application must target. When omitted, the
+    /// database named in the connection string is used as the expected target.</param>
+    public PostgresPrimeTectApiFactory(string connectionString, string? expectedDatabaseName = null)
+    {
+        var expected = string.IsNullOrWhiteSpace(expectedDatabaseName)
+            ? new NpgsqlConnectionStringBuilder(connectionString).Database ?? string.Empty
+            : expectedDatabaseName;
+        // Refuse a forbidden application target (primetect, an existing demo, the provisioning database, or any other
+        // database) before the host is allowed to open a connection.
+        PostgresVerificationGuard.EnsureApplicationTarget(connectionString, expected);
+        this.connectionString = connectionString;
+    }
+
     public bool FailNextSave { get; set; }
 
     /// <summary>Private, test-owned meter photo storage root cleaned up by the owning test.</summary>
@@ -276,6 +277,77 @@ public sealed class PostgresFactAttribute : FactAttribute
         {
             Skip = "PRIMETECT_TEST_POSTGRES_ADMIN_CONNECTION is not set; PostgreSQL integration tests were not run.";
         }
+    }
+}
+
+/// <summary>
+/// Negative coverage for the disposable-database safety checks. These run without any PostgreSQL server and never
+/// open a connection: they prove a forbidden application target is rejected up front.
+/// </summary>
+public sealed class PostgresVerificationGuardTests
+{
+    private const string Password = "not-a-real-password";
+
+    [Theory]
+    [InlineData("primetect")]
+    [InlineData("primetect_demo_collections_20261010_a20fcfd3")]
+    [InlineData("postgres")]
+    [InlineData("template1")]
+    public void Application_factory_refuses_a_forbidden_application_database_before_opening(string database)
+    {
+        var connection = $"Host=127.0.0.1;Port=5432;Database={database};Username=postgres;Password={Password}";
+        var exception = Assert.Throws<InvalidOperationException>(() => new PostgresPrimeTectApiFactory(connection));
+        Assert.Contains("must target only", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Application_factory_refuses_a_generated_name_that_is_not_the_expected_target()
+    {
+        var generated = $"primetect_verification_{Guid.NewGuid():N}";
+        var other = $"primetect_verification_{Guid.NewGuid():N}";
+        var connection = $"Host=127.0.0.1;Port=5432;Database={generated};Username=postgres;Password={Password}";
+        Assert.Throws<InvalidOperationException>(() => new PostgresPrimeTectApiFactory(connection, other));
+    }
+
+    [Fact]
+    public void Application_factory_accepts_the_exact_generated_target()
+    {
+        var generated = $"primetect_verification_{Guid.NewGuid():N}";
+        var connection = $"Host=127.0.0.1;Port=5432;Database={generated};Username=postgres;Password={Password}";
+        using var factory = new PostgresPrimeTectApiFactory(connection);
+        // Construction alone must not open a connection; the guard is the only thing that ran.
+        Assert.NotNull(factory);
+    }
+
+    [Theory]
+    [InlineData("localhost", "postgres", true)]
+    [InlineData("127.0.0.1", "template1", true)]
+    [InlineData("::1", "postgres", true)]
+    [InlineData("localhost", "primetect", false)]
+    [InlineData("db.example.test", "postgres", false)]
+    public void Provisioning_target_only_allows_a_local_administrative_database(string host, string database, bool expected)
+    {
+        var builder = new NpgsqlConnectionStringBuilder
+        {
+            Host = host,
+            Database = database,
+            Username = "postgres",
+            Password = Password,
+        };
+        Assert.Equal(expected, PostgresVerificationGuard.IsSafeLocalAdminTarget(builder));
+    }
+
+    [Theory]
+    [InlineData("primetect_verification_0123456789abcdef0123456789abcdef", true)]
+    [InlineData("primetect_verification_0123", false)]
+    [InlineData("primetect_verification_0123456789abcdef0123456789abcdeg", false)]
+    [InlineData("primetect_verification_0123456789ABCDEF0123456789ABCDEF", true)]
+    [InlineData("primetect_demo_guided_20261010_da3c89c", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void Generated_database_name_check_is_strict(string? name, bool expected)
+    {
+        Assert.Equal(expected, PostgresVerificationGuard.IsSafeGeneratedDatabaseName(name));
     }
 }
 

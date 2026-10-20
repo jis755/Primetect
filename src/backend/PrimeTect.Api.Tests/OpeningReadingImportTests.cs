@@ -350,6 +350,74 @@ public sealed class OpeningReadingImportTests : IClassFixture<PrimeTectApiFactor
         Assert.Empty(setup.Installations);
     }
 
+    [Fact]
+    public async Task Opening_reading_dated_on_the_preceding_period_boundary_starts_the_first_billing_month()
+    {
+        using var admin = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        await RegisterOwnerAsync(admin, suffix);
+        var property = await CreatePropertyAsync(admin, $"Boundary {suffix}", ["Room A"]);
+        var unit = property.Floors.Single().Units.Single();
+        await SaveElectricityChargeAsync(admin, property.Id, 10m);
+        await AssignTenantAsync(admin, property.Id, [unit.Id]);
+
+        var csrf = await CsrfAsync(admin);
+        // A 30 September reading is the baseline that starts the October-issued bill, exactly like a manual opening entry.
+        var content = CsvBytes(property.Id, (unit.Id, null, "10020", "2026-09-30", "2026-10"));
+        var preview = await ReadAsync<OpeningReadingPreviewResponse>(await PreviewAsync(admin, csrf, property.Id, "import.csv", content));
+        Assert.True(preview.CanCommit, string.Join(" | ", preview.Rows.Single().Errors));
+        Assert.Equal(1, preview.ReadyCount);
+
+        await ReadAsync<OpeningReadingCommitResponse>(await CommitAsync(admin, csrf, property.Id, preview.PreviewToken, Guid.NewGuid()));
+
+        var setup = await ReadAsync<MeterSetupResponse>(await admin.GetAsync($"/api/properties/{property.Id}/meter-setup"));
+        var installation = Assert.Single(setup.Installations);
+        Assert.Equal(10020m, installation.OpeningReading);
+        Assert.Equal(new DateOnly(2026, 9, 30), installation.OpeningReadingDate);
+
+        var cycle = await ReadAsync<BillingCycleResponse>(await admin.PostAsJsonAsync($"/api/properties/{property.Id}/billing-cycles", new { billingMonth = "2026-10-01" }));
+        var electricity = cycle.Bills.Single().Charges.Single();
+        Assert.Equal(MeterReadingSource.OpeningEntry, electricity.PreviousReadingSource);
+        Assert.Equal(10020m, electricity.PreviousReading);
+        Assert.Equal(new DateOnly(2026, 9, 30), electricity.PreviousReadingDate);
+    }
+
+    [Fact]
+    public async Task Opening_reading_dated_in_the_month_of_the_first_billing_month_is_accepted()
+    {
+        using var admin = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        await RegisterOwnerAsync(admin, suffix);
+        var property = await CreatePropertyAsync(admin, $"FirstOfMonth {suffix}", ["Room A"]);
+        var unit = property.Floors.Single().Units.Single();
+        await SaveElectricityChargeAsync(admin, property.Id, 10m);
+
+        var csrf = await CsrfAsync(admin);
+        // A 1 January reading starts the February bill (the documented meter-reading convention).
+        var content = CsvBytes(property.Id, (unit.Id, null, "10020", "2026-01-01", "2026-02"));
+        var preview = await ReadAsync<OpeningReadingPreviewResponse>(await PreviewAsync(admin, csrf, property.Id, "import.csv", content));
+        Assert.True(preview.CanCommit, string.Join(" | ", preview.Rows.Single().Errors));
+        Assert.Equal(1, preview.ReadyCount);
+    }
+
+    [Fact]
+    public async Task Opening_reading_dated_after_the_first_billing_month_is_rejected_as_a_missing_period()
+    {
+        using var admin = factory.CreateClient();
+        var suffix = Guid.NewGuid().ToString("N");
+        await RegisterOwnerAsync(admin, suffix);
+        var property = await CreatePropertyAsync(admin, $"After {suffix}", ["Room A"]);
+        var unit = property.Floors.Single().Units.Single();
+        await SaveElectricityChargeAsync(admin, property.Id, 10m);
+
+        var csrf = await CsrfAsync(admin);
+        // A 1 March reading for a February first billing month would span the whole missing February period.
+        var content = CsvBytes(property.Id, (unit.Id, null, "10020", "2026-03-01", "2026-02"));
+        var preview = await ReadAsync<OpeningReadingPreviewResponse>(await PreviewAsync(admin, csrf, property.Id, "import.csv", content));
+        Assert.False(preview.CanCommit);
+        Assert.Contains(preview.Rows.Single().Errors, message => message.Contains("immediately before", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static async Task<HttpResponseMessage> PreviewAsync(HttpClient client, string csrf, Guid propertyId, string fileName, byte[] content)
     {
         using var form = new MultipartFormDataContent();
